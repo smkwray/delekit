@@ -15,7 +15,7 @@ function ccg {
         $saved[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
         [Environment]::SetEnvironmentVariable($k, $null, 'Process')
     }
-    $dev = Join-Path $env:LOCALAPPDATA 'delegate-kit\device.env'
+    $dev = Join-Path $env:LOCALAPPDATA 'delekit\device.env'
     if (Test-Path -LiteralPath $dev) {
         foreach ($line in Get-Content -LiteralPath $dev) {
             $t = $line.Trim()
@@ -30,7 +30,7 @@ function ccg {
         }
     }
     else {
-        Write-Warning "delegate-kit device.env not found; launching without the gateway."
+        Write-Warning "delekit device.env not found; launching without the gateway."
     }
     try { & claude --dangerously-skip-permissions @args }
     finally { foreach ($k in $vars) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') } }

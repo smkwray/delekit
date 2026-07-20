@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 BIN_DIR="${HOME}/.local/bin"
-DEVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit"
+DEVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/delekit"
 COPY_MODE=0
 
 usage() {
@@ -36,7 +36,7 @@ mkdir -p "$CLAUDE_HOME/agents" "$CLAUDE_HOME/skills" "$BIN_DIR" "$DEVICE_DIR"
 wire_dir() {
   local source="$1" target="$2"
   if [[ "$COPY_MODE" -eq 1 ]]; then
-    local marker="$target/.delegate-kit-copy-source"
+    local marker="$target/.delekit-copy-source"
     if [[ -e "$target" || -L "$target" ]]; then
       if [[ -d "$target" && -f "$marker" && "$(cat "$marker")" == "$source" ]]; then
         rm -rf "$target"
@@ -73,7 +73,7 @@ wire_file() {
     # A literal copy would lose the script's relative path to config/models.env.
     # Install a tiny wrapper that keeps the synced kit as the source of truth.
     local temp
-    temp="$(mktemp "${TMPDIR:-/tmp}/delegate-kit-wrapper.XXXXXX")"
+    temp="$(mktemp "${TMPDIR:-/tmp}/delekit-wrapper.XXXXXX")"
     printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$source" > "$temp"
     if [[ -e "$target" || -L "$target" ]]; then
       if [[ -f "$target" ]] && cmp -s "$temp" "$target"; then
@@ -101,13 +101,21 @@ wire_file() {
   echo "Installed: $target"
 }
 
-wire_dir "$KIT_ROOT/generated/claude/agents" "$CLAUDE_HOME/agents/delegate-kit"
+wire_dir "$KIT_ROOT/generated/claude/agents" "$CLAUDE_HOME/agents/delekit"
 wire_dir "$KIT_ROOT/generated/claude/skills/orchestrate-delegates" "$CLAUDE_HOME/skills/orchestrate-delegates"
 wire_file "$KIT_ROOT/bin/claudex.sh" "$BIN_DIR/claudex"
 wire_file "$KIT_ROOT/bin/dairy.sh" "$BIN_DIR/dairy"
 wire_file "$KIT_ROOT/bin/prune-worktrees.sh" "$BIN_DIR/prune-worktrees"
 
 DEVICE_ENV="$DEVICE_DIR/device.env"
+# Carry over a device.env from the pre-rename location so a switchover keeps the
+# gateway token without re-entry. No-op on a fresh install (old path absent).
+LEGACY_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit/device.env"
+if [[ ! -f "$DEVICE_ENV" && -f "$LEGACY_ENV" ]]; then
+  cp "$LEGACY_ENV" "$DEVICE_ENV"
+  chmod 600 "$DEVICE_ENV" 2>/dev/null || true
+  echo "Migrated existing configuration: $LEGACY_ENV -> $DEVICE_ENV"
+fi
 if [[ ! -f "$DEVICE_ENV" ]]; then
   cp "$KIT_ROOT/config/device.env.example" "$DEVICE_ENV"
   chmod 600 "$DEVICE_ENV" 2>/dev/null || true

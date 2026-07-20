@@ -57,8 +57,8 @@ Dry-run resolves the prompt, model, access, project, and prospective worktree pa
 
 Logs are device-local by default:
 
-- macOS/Linux: `${XDG_STATE_HOME:-~/.local/state}/delegate-kit/logs`
-- Windows: `%LOCALAPPDATA%\delegate-kit\logs`
+- macOS/Linux: `${XDG_STATE_HOME:-~/.local/state}/delekit/logs`
+- Windows: `%LOCALAPPDATA%\delekit\logs`
 
 Each run writes:
 

@@ -9,7 +9,7 @@ $KitRoot = Split-Path -Parent $PSScriptRoot
 $DeviceEnv = if ($env:DELEGATE_DEVICE_ENV) {
     $env:DELEGATE_DEVICE_ENV
 } else {
-    Join-Path $env:LOCALAPPDATA 'delegate-kit\device.env'
+    Join-Path $env:LOCALAPPDATA 'delekit\device.env'
 }
 
 function Import-SimpleEnvFile {
@@ -49,7 +49,7 @@ if (-not $env:CLAUDE_CODE_ATTRIBUTION_HEADER) {
 if (-not $env:ENABLE_TOOL_SEARCH) {
     $env:ENABLE_TOOL_SEARCH = 'false'
 }
-$env:DELEGATE_KIT_ROOT = $KitRoot
+$env:DELEKIT_ROOT = $KitRoot
 
 # Claude Code persists a /model choice into the *global* user settings file, so
 # picking a gateway-only alias inside a gateway session leaks it to every later

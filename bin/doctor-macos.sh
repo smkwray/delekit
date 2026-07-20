@@ -3,7 +3,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-DEVICE_ENV="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit/device.env}"
+DEVICE_ENV="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delekit/device.env}"
 FAIL=0
 
 check_cmd() {
@@ -56,7 +56,7 @@ if [[ "$have_python" -eq 1 ]]; then
   python3 "$KIT_ROOT/tools/verify_kit.py" || FAIL=1
 fi
 
-for path in "$CLAUDE_HOME/agents/delegate-kit" "$CLAUDE_HOME/skills/orchestrate-delegates"; do
+for path in "$CLAUDE_HOME/agents/delekit" "$CLAUDE_HOME/skills/orchestrate-delegates"; do
   if [[ -e "$path" ]]; then echo "OK   wired             $path"; else echo "MISS wired             $path"; FAIL=1; fi
 done
 
@@ -74,7 +74,7 @@ if [[ -f "$DEVICE_ENV" ]]; then
       echo "MISS gateway auth      set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY"
       FAIL=1
     else
-      models_json="$(mktemp -t delegate-kit-models.XXXXXX)"
+      models_json="$(mktemp -t delekit-models.XXXXXX)"
       trap 'rm -f "$models_json"' EXIT
       base_url="${ANTHROPIC_BASE_URL%/}"
       if curl -fsS --max-time 5 "${auth_args[@]}" "$base_url/v1/models" > "$models_json" 2>/dev/null; then

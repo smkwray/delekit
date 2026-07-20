@@ -196,7 +196,7 @@ if [[ "$WORKTREE" -eq 1 && "$ACCESS" == "read-only" ]]; then
   WORKTREE=0
 fi
 
-state_root="${XDG_STATE_HOME:-$HOME/.local/state}/delegate-kit"
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}/delekit"
 LOG_DIR="${DELEGATE_LOG_DIR:-$state_root/logs}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)_$$"
 prefix="$LOG_DIR/${timestamp}_${MODE}_${BACKEND}"

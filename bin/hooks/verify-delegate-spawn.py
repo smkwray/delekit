@@ -38,7 +38,7 @@ PREFIX = os.environ.get("DELEGATE_AGENT_PREFIX", "tandy")
 GENERIC = {"general-purpose", "Explore", "Plan", ""}
 LOG = pathlib.Path(os.environ.get(
     "DELEGATE_SPAWN_LOG",
-    pathlib.Path.home() / ".local/state/delegate-kit/spawn-audit.jsonl"))
+    pathlib.Path.home() / ".local/state/delekit/spawn-audit.jsonl"))
 
 
 def deny(reason: str) -> None:

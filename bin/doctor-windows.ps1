@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Continue'
 $KitRoot = Split-Path -Parent $PSScriptRoot
-$DeviceEnv = if ($env:DELEGATE_DEVICE_ENV) { $env:DELEGATE_DEVICE_ENV } else { Join-Path $env:LOCALAPPDATA 'delegate-kit\device.env' }
+$DeviceEnv = if ($env:DELEGATE_DEVICE_ENV) { $env:DELEGATE_DEVICE_ENV } else { Join-Path $env:LOCALAPPDATA 'delekit\device.env' }
 $ClaudeHome = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }
 $Failed = $false
 
@@ -39,7 +39,7 @@ if ($Python) {
     $Failed = $true
 }
 
-foreach ($path in @((Join-Path $ClaudeHome 'agents\delegate-kit'), (Join-Path $ClaudeHome 'skills\orchestrate-delegates'))) {
+foreach ($path in @((Join-Path $ClaudeHome 'agents\delekit'), (Join-Path $ClaudeHome 'skills\orchestrate-delegates'))) {
     if (Test-Path -LiteralPath $path) { Write-Host "OK   wired`t$path" } else { Write-Host "MISS wired`t$path"; $Failed = $true }
 }
 

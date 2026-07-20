@@ -142,7 +142,7 @@ if ($Worktree -and $Access -eq 'read-only') {
     $Worktree = $false
 }
 
-$StateRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'delegate-kit' } else { Join-Path $HOME '.delegate-kit' }
+$StateRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'delekit' } else { Join-Path $HOME '.delekit' }
 $LogDir = if ($env:DELEGATE_LOG_DIR) { $env:DELEGATE_LOG_DIR } else { Join-Path $StateRoot 'logs' }
 $timestamp = "{0}_{1}" -f ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')), $PID
 $prefix = Join-Path $LogDir "${timestamp}_${Mode}_${Backend}"

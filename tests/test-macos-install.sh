@@ -17,7 +17,7 @@ HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" CLAUDE_CONFIG_DIR="$TMP/claude" \
 # Agent filenames come from config/models.env, so assert the rendered set
 # rather than one hardcoded name that a rename would silently invalidate.
 for agent in "$ROOT"/generated/claude/agents/*.md; do
-  assert_file "$TMP/claude/agents/delegate-kit/$(basename "$agent")"
+  assert_file "$TMP/claude/agents/delekit/$(basename "$agent")"
 done
 assert_file "$TMP/claude/skills/orchestrate-delegates/SKILL.md"
 assert_grep "exec $ROOT/bin/claudex.sh" "$TMP/bin/claudex"
@@ -37,8 +37,8 @@ print(json.dumps({
 PY
 FAKE
 chmod +x "$TMP/fake/claude"
-sed -i.bak 's#replace-with-local-proxy-client-key#test-key#' "$TMP/xdg/delegate-kit/device.env"
-rm -f "$TMP/xdg/delegate-kit/device.env.bak"
+sed -i.bak 's#replace-with-local-proxy-client-key#test-key#' "$TMP/xdg/delekit/device.env"
+rm -f "$TMP/xdg/delekit/device.env.bak"
 PATH="$TMP/fake:/usr/bin:/bin" HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" \
   CLAUDE_CODE_SUBAGENT_MODEL=bad "$TMP/bin/claudex" --model opus > "$TMP/launch.json"
 python3 - "$TMP/launch.json" <<'PY'

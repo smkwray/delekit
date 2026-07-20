@@ -12,10 +12,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 The installer creates directory junctions for generated agents and the Skill. Junctions track future renders without requiring the same OneDrive path on every machine.
 
 ```text
-%USERPROFILE%\.claude\agents\delegate-kit
+%USERPROFILE%\.claude\agents\delekit
 %USERPROFILE%\.claude\skills\orchestrate-delegates
 %USERPROFILE%\bin\claudex.cmd
-%LOCALAPPDATA%\delegate-kit\device.env
+%LOCALAPPDATA%\delekit\device.env
 ```
 
 Populate only the local `device.env`, including `DELEGATE_PARENT_MODEL`. The

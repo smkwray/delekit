@@ -11,8 +11,8 @@
 # terminal keeps routing through the proxy without saying so.
 #
 # device.env lives outside the synced kit. Both platform paths are probed:
-#   macOS/Linux:        ${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit/device.env
-#   Windows (git-bash): $HOME/AppData/Local/delegate-kit/device.env
+#   macOS/Linux:        ${XDG_CONFIG_HOME:-$HOME/.config}/delekit/device.env
+#   Windows (git-bash): $HOME/AppData/Local/delekit/device.env
 
 ccg() (
   # A stray API key would outrank the gateway token; drop it for this launch.
@@ -26,14 +26,14 @@ ccg() (
     exec claudex --dangerously-skip-permissions "$@"
   fi
 
-  _dev="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit/device.env}"
-  [ -f "$_dev" ] || _dev="$HOME/AppData/Local/delegate-kit/device.env"
+  _dev="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delekit/device.env}"
+  [ -f "$_dev" ] || _dev="$HOME/AppData/Local/delekit/device.env"
   if [ -f "$_dev" ]; then
     set -a
     . "$_dev"
     set +a
   else
-    echo "ccg: delegate-kit device.env not found; launching without the gateway." >&2
+    echo "ccg: delekit device.env not found; launching without the gateway." >&2
   fi
   exec claude --dangerously-skip-permissions "$@"
 )

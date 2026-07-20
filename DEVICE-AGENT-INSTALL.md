@@ -23,7 +23,7 @@ VALIDATE BEFORE INSTALLING
 
 INSTALL
 4. Run bin/install-macos.sh or bin/install-windows.ps1. Install only under the
-   kit's own delegate-kit/orchestrate-delegates names; never overwrite unrelated
+   kit's own delekit/orchestrate-delegates names; never overwrite unrelated
    Claude Code agents, skills, settings, or commands.
 5. Install CLIProxyAPI from its official releases, verified against the release
    checksums, into a LOCAL directory. The binary, its config.yaml, and its auth

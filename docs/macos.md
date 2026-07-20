@@ -13,10 +13,10 @@ chmod +x bin/*.sh tests/*.sh
 Creates:
 
 ```text
-~/.claude/agents/delegate-kit                  symlink to generated agents
+~/.claude/agents/delekit                  symlink to generated agents
 ~/.claude/skills/orchestrate-delegates         symlink to the generated Skill
 ~/.local/bin/claudex                           symlink to the launcher
-~/.config/delegate-kit/device.env              local-only gateway settings
+~/.config/delekit/device.env              local-only gateway settings
 ```
 
 Ensure `~/.local/bin` is on `PATH`. The installer does not modify shell
@@ -79,7 +79,7 @@ lsof -nP -iTCP:8317 -sTCP:LISTEN
 Source the snippet from `~/.zshrc`, pointing at wherever you cloned the kit:
 
 ```bash
-_ccg_snippet="/path/to/claude-delegate-kit/bin/ccg-snippet.sh"
+_ccg_snippet="/path/to/delekit/bin/ccg-snippet.sh"
 [ -r "$_ccg_snippet" ] && . "$_ccg_snippet"
 unset _ccg_snippet
 ```

@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $KitRoot = Split-Path -Parent $PSScriptRoot
 $ClaudeHome = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }
-$DeviceDir = Join-Path $env:LOCALAPPDATA 'delegate-kit'
+$DeviceDir = Join-Path $env:LOCALAPPDATA 'delekit'
 
 function Get-PythonCommand {
     foreach ($candidate in @('py', 'python', 'python3')) {
@@ -44,7 +44,7 @@ function Install-DirectoryLink {
     $Source = (Resolve-Path -LiteralPath $Source).Path
 
     if ($Copy) {
-        $marker = Join-Path $Target '.delegate-kit-copy-source'
+        $marker = Join-Path $Target '.delekit-copy-source'
         if (Test-Path -LiteralPath $Target) {
             $managed = $false
             if (Test-Path -LiteralPath $marker) {
@@ -54,7 +54,7 @@ function Install-DirectoryLink {
             if (-not $managed) { throw "Refusing to overwrite unmanaged path: $Target" }
             Remove-Item -LiteralPath $Target -Recurse -Force
             Copy-Item -LiteralPath $Source -Destination $Target -Recurse
-            Set-Content -LiteralPath (Join-Path $Target '.delegate-kit-copy-source') -Encoding UTF8 -Value $Source
+            Set-Content -LiteralPath (Join-Path $Target '.delekit-copy-source') -Encoding UTF8 -Value $Source
             Write-Host "Refreshed copy: $Target"
             return
         }
@@ -97,7 +97,7 @@ function Install-CommandWrapper {
     Write-Host "Installed: $Path"
 }
 
-Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $ClaudeHome 'agents\delegate-kit')
+Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $ClaudeHome 'agents\delekit')
 Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $ClaudeHome 'skills\orchestrate-delegates')
 
 $ClaudeXTarget = Join-Path $KitRoot 'bin\claudex.ps1'
@@ -107,6 +107,13 @@ Install-CommandWrapper -Path $ClaudeXWrapper -Target $ClaudeXTarget
 Install-CommandWrapper -Path (Join-Path $BinDir 'dairy.cmd') -Target $DairyTarget
 
 $DeviceEnv = Join-Path $DeviceDir 'device.env'
+# Carry over a device.env from the pre-rename location so a switchover keeps the
+# gateway token without re-entry. No-op on a fresh install (old path absent).
+$LegacyEnv = Join-Path $env:LOCALAPPDATA 'delegate-kit\device.env'
+if ((-not (Test-Path -LiteralPath $DeviceEnv)) -and (Test-Path -LiteralPath $LegacyEnv)) {
+    Copy-Item -LiteralPath $LegacyEnv -Destination $DeviceEnv
+    Write-Host "Migrated existing configuration: $LegacyEnv -> $DeviceEnv"
+}
 if (-not (Test-Path -LiteralPath $DeviceEnv)) {
     Copy-Item -LiteralPath (Join-Path $KitRoot 'config\device.env.example') -Destination $DeviceEnv
     Write-Host "Created local credential template: $DeviceEnv"

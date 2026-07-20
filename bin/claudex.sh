@@ -14,7 +14,7 @@ resolve_self() {
 
 SCRIPT_DIR="$(resolve_self)"
 KIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEVICE_ENV="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delegate-kit/device.env}"
+DEVICE_ENV="${DELEGATE_DEVICE_ENV:-${XDG_CONFIG_HOME:-$HOME/.config}/delekit/device.env}"
 
 load_env_file() {
   local file="$1" line key value
@@ -47,7 +47,7 @@ export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="${CLAUDE_CODE_ENABLE_GATEWAY_
 export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT="${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-1}"
 export CLAUDE_CODE_ATTRIBUTION_HEADER="${CLAUDE_CODE_ATTRIBUTION_HEADER:-0}"
 export ENABLE_TOOL_SEARCH="${ENABLE_TOOL_SEARCH:-false}"
-export DELEGATE_KIT_ROOT="$KIT_ROOT"
+export DELEKIT_ROOT="$KIT_ROOT"
 
 # Claude Code persists a /model choice into the *global* user settings file, so
 # picking a gateway-only alias inside a gateway session leaks it to every later
