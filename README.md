@@ -6,8 +6,8 @@ Delegate coding work to a **non-Claude model** two ways, on macOS and Windows:
   same session as a Claude parent, via a local
   [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) gateway.
   Interactive.
-- **`dairy`** — a headless runner that shells out to `codex`, `claude`, or
-  `gemini` for one-shot and CI jobs. No gateway required.
+- **`dairy`** — a headless runner that shells out to `codex` or `claude` for
+  one-shot and CI jobs. No gateway required.
 
 Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees both paths
 create.
