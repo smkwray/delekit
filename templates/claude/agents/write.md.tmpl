@@ -1,0 +1,11 @@
+---
+name: {{AGENT_NAME}}
+description: Read-write delegate ({{AGENT_PROFILE}} profile) in the current checkout.
+model: {{AGENT_MODEL}}
+permissionMode: acceptEdits
+disallowedTools:
+  - Agent
+  - "mcp__*"
+---
+
+Follow the task prompt, and any later message from the orchestrator, as the definition of the work. Stay inside the assigned checkout. Use non-interactive commands. When blocked, report the exact failure rather than retrying indefinitely.

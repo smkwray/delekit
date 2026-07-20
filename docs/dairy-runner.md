@@ -1,0 +1,116 @@
+# Fallback runner
+
+Use `dairy.sh` or `dairy.ps1` for:
+
+- CI, scheduled, or unattended one-shot work;
+- direct Codex execution when proxy/native-agent translation is broken;
+- a terminal without an interactive orchestrator;
+- durable prompt/report/stdout/stderr/status artifacts for another process.
+
+Do not use it merely because a native worker's assignment changed. Native agents can be messaged and resumed; a headless process cannot receive semantic course corrections.
+
+## Compatibility names
+
+```text
+tandy -> write -> workspace-write
+dairy -> read  -> read-only
+full              danger-full-access
+```
+
+Tandy and Dairy are not personas. The task prompt defines the work. The uploaded Tandy default was unrestricted; the new write default is repository-confined `workspace-write`. Full access is explicit.
+
+## Prompt overhead
+
+The runner prepends one short access line and, when applicable, one worktree line. It does not send backend/model/log/report metadata to the model. Use `--no-preamble` or `-NoPreamble` when the task already carries the needed boundary.
+
+## Profiles and central model mapping
+
+For Codex, `--profile default|fast|deep` and `-Profile` resolve model and effort from `config/models.env`. `--model`/`-Model` and `--effort`/`-Effort` override a single run. Claude and Gemini model choices remain explicit because their provider defaults are better handled by their own CLIs.
+
+## Examples
+
+```bash
+dairy write --profile default --prompt-file task.md --worktree
+dairy read --profile deep --prompt-stdin < audit.md
+dairy full --model explicit-provider-id --prompt 'authorized host task'
+```
+
+```powershell
+dairy write -Profile default -PromptFile task.md -Worktree
+Get-Content audit.md -Raw | dairy read -Profile deep -PromptStdin
+dairy full -Model explicit-provider-id -Prompt 'authorized host task'
+```
+
+## Dry-run
+
+```bash
+dairy write --backend codex --prompt 'test' --worktree --dry-run --json
+```
+
+```powershell
+dairy write -Backend codex -Prompt 'test' -Worktree -DryRun -Json
+```
+
+Dry-run resolves the prompt, model, access, project, and prospective worktree path but creates no log directory, report, branch, or worktree and does not require the backend CLI to be installed.
+
+## Logs and status
+
+Logs are device-local by default:
+
+- macOS/Linux: `${XDG_STATE_HOME:-~/.local/state}/delegate-kit/logs`
+- Windows: `%LOCALAPPDATA%\delegate-kit\logs`
+
+Each run writes:
+
+```text
+.prompt.md
+.stdout.log
+.stderr.log
+.report.md
+.status.json
+.done
+```
+
+Large stdout/stderr traces expire according to `RUNNER_LOG_TTL_DAYS`; prompts, reports, status, and completion markers remain until deliberately removed. Missing or one-line `Execution error` reports are converted into a failed status rather than being accepted as successful completion.
+
+## Worktree behavior
+
+`--worktree`/`-Worktree`:
+
+- requires a Git repository;
+- fails on a dirty parent checkout by default;
+- branches from committed `HEAD`;
+- creates a distinct branch and directory;
+- optionally auto-commits the worker's changes;
+- leaves the worktree for deliberate review, merge, or discard.
+
+Use `--dirty-policy ignore` or `-DirtyPolicy ignore` only with awareness that uncommitted parent changes are absent. Cleanup is never automatic because deletion must follow the integration decision.
+
+## Permission behavior
+
+Codex `read-only` and `workspace-write` runs use the selected sandbox with `approval_policy=never`, so blocked operations fail instead of prompting. `danger-full-access` uses Codex's explicit bypass flag. Claude and Gemini backends cannot reproduce every Codex sandbox boundary; use them only when their CLI's permission behavior is acceptable.
+
+---
+
+# Known issues
+
+## `--profile` silently ignored on non-Codex runner backends **[all]**
+
+**Symptom.** `dairy … --backend claude --profile deep` runs on the CLI's default
+model while the status JSON reports `"profile":"deep"`.
+
+**Cause.** `config/models.env` maps profiles to Codex model IDs only, so the
+runner resolved a model from the profile for the `codex` backend alone.
+
+**Fix.** Both runners now **fail** rather than guess. For `--backend claude` or
+`--backend gemini`, pass `--model` explicitly.
+
+---
+
+## The runner does not use the gateway **[all]**
+
+`dairy` shells out to the backend CLI with whatever environment it inherits. Run
+from a normal terminal it uses your direct login; run from inside a gateway
+session it inherits the proxy, and `--model` must then name something the
+gateway serves (check `/v1/models`). This is by design — it is the fallback
+path — but it surprises people who expect the runner to follow `ccg`.

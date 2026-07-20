@@ -1,0 +1,21 @@
+# Optional CLIProxyAPI fragment. Review and merge; do not replace your full config.
+# Keep the proxy local unless you deliberately secure a remote deployment.
+host: "127.0.0.1"
+port: 8317
+
+remote-management:
+  allow-remote: false
+  secret-key: ""  # empty disables the management API
+
+request-retry: 3
+
+# Prevent a long silent upstream interval from looking like a dead connection.
+streaming:
+  keepalive-seconds: 15
+  bootstrap-retries: 1
+
+# Enable only when multiple matching credentials benefit from sticky routing.
+# routing:
+#   strategy: "round-robin"
+#   session-affinity: true
+#   session-affinity-ttl: "1h"

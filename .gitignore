@@ -1,0 +1,14 @@
+# Local, per-device gateway settings — never published
+device.env
+*.local.yaml
+config.yaml
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

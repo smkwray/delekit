@@ -1,0 +1,45 @@
+---
+name: orchestrate-delegates
+description: Coordinate one or more arbitrary delegate agents, including parallel worktrees, model profiles, course corrections, and integration.
+---
+
+Pick a delegate by **model profile** and **capability**. The Agent tool's `model`
+parameter only accepts built-in names, so a gateway alias cannot be passed at
+spawn time; the profile comes from the agent you name.
+
+Profiles: `{{DELEGATE_NAME_DEFAULT}}` (default), `{{DELEGATE_NAME_FAST}}` (fast, high-volume),
+`{{DELEGATE_NAME_DEEP}}` (strongest). Every profile has all three capabilities:
+
+- `{{AGENT_PREFIX}}-<profile>` — writer in the current checkout
+- `{{AGENT_PREFIX}}-<profile>-worktree` — writer isolated in its own Git worktree
+- `{{AGENT_PREFIX}}-<profile>-readonly` — investigation with file tools and read-only shell
+
+So `{{AGENT_PREFIX}}-{{DELEGATE_NAME_FAST}}-readonly` and `{{AGENT_PREFIX}}-{{DELEGATE_NAME_DEEP}}-worktree` are both valid.
+
+Spawn with **`subagent_type: {{AGENT_PREFIX}}-<profile>[-capability]`**. That
+parameter name is load-bearing: the Agent tool ignores unrecognised parameters
+silently, so a typo like `subject_type` does not error — it drops you to a
+generic subagent on the session's own model, in the main checkout, with no
+worktree. Nothing in the transcript says so.
+
+Verify rather than assume. A delegate asked to state its model answers with its
+gateway alias (`{{DELEGATE_ALIAS_DEFAULT}}` and friends); a silent fallback
+answers with the session model instead. If a delegate's first report does not
+look like it ran where you sent it, check before trusting the work.
+
+A generic subagent carries no alias and inherits the session model, so name a
+delegate explicitly when the work must run on a profile. Never put a provider
+model ID in a prompt or a spawn parameter.
+
+These are capability boundaries, not personas: the task prompt alone defines the
+work. Give each worker a unique runtime name, objective, context, file ownership,
+and acceptance criteria, and keep its agent ID.
+
+Use `SendMessage` to redirect or extend a running worker. It arrives when that
+worker's current tool call returns, and it cannot approve a permission prompt. If
+a shell call hangs, use `TaskStop`, then message the same agent ID to resume with
+a non-interactive command.
+
+Run independent workers in parallel, never overlapping writers in one checkout.
+Review and integrate worktrees serially. The orchestrator owns final judgment and
+merging.

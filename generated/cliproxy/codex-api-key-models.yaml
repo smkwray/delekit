@@ -1,0 +1,10 @@
+# Generated from config/models.env.
+# Paste the entries below into the `models:` list of each relevant
+# `codex-api-key` credential. This is a fragment, not a full config.
+models:
+  - name: "gpt-5.6-terra"
+    alias: "claude-delegate-terra"
+  - name: "gpt-5.6-luna"
+    alias: "claude-delegate-luna"
+  - name: "gpt-5.6-sol"
+    alias: "claude-delegate-sol"

@@ -1,0 +1,4 @@
+profile	alias	provider-model
+default	claude-delegate-terra	gpt-5.6-terra
+fast	claude-delegate-luna	gpt-5.6-luna
+deep	claude-delegate-sol	gpt-5.6-sol

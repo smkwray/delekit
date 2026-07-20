@@ -1,0 +1,10 @@
+# Generated from config/models.env. Merge under the top-level config.
+# Applies to Codex OAuth/login credentials.
+oauth-model-alias:
+  codex:
+    - name: "gpt-5.6-terra"
+      alias: "claude-delegate-terra"
+    - name: "gpt-5.6-luna"
+      alias: "claude-delegate-luna"
+    - name: "gpt-5.6-sol"
+      alias: "claude-delegate-sol"

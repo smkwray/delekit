@@ -1,0 +1,70 @@
+[CmdletBinding()]
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ClaudeArguments
+)
+
+$ErrorActionPreference = 'Stop'
+$KitRoot = Split-Path -Parent $PSScriptRoot
+$DeviceEnv = if ($env:DELEGATE_DEVICE_ENV) {
+    $env:DELEGATE_DEVICE_ENV
+} else {
+    Join-Path $env:LOCALAPPDATA 'delegate-kit\device.env'
+}
+
+function Import-SimpleEnvFile {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    foreach ($raw in Get-Content -LiteralPath $Path) {
+        $line = $raw.Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        $parts = $line.Split('=', 2)
+        if ($parts.Count -ne 2) { throw "Invalid line in $Path: $raw" }
+        $key = $parts[0].Trim()
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "Invalid key in $Path: $key" }
+        [Environment]::SetEnvironmentVariable($key, $value, 'Process')
+    }
+}
+
+Import-SimpleEnvFile -Path $DeviceEnv
+
+if (-not $env:ANTHROPIC_BASE_URL) {
+    throw "Set ANTHROPIC_BASE_URL in $DeviceEnv or the process environment."
+}
+if (-not $env:ANTHROPIC_AUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
+    throw "Set ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY in $DeviceEnv or the process environment."
+}
+
+Remove-Item Env:CLAUDE_CODE_SUBAGENT_MODEL -ErrorAction SilentlyContinue
+if (-not $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) {
+    $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
+}
+if (-not $env:CLAUDE_CODE_ALWAYS_ENABLE_EFFORT) {
+    $env:CLAUDE_CODE_ALWAYS_ENABLE_EFFORT = '1'
+}
+if (-not $env:CLAUDE_CODE_ATTRIBUTION_HEADER) {
+    $env:CLAUDE_CODE_ATTRIBUTION_HEADER = '0'
+}
+if (-not $env:ENABLE_TOOL_SEARCH) {
+    $env:ENABLE_TOOL_SEARCH = 'false'
+}
+$env:DELEGATE_KIT_ROOT = $KitRoot
+
+# Claude Code persists a /model choice into the *global* user settings file, so
+# picking a gateway-only alias inside a gateway session leaks it to every later
+# launch, including direct-to-Anthropic ones, which then fail with "model may
+# not exist". Pinning the parent per launcher makes each one self-consistent
+# regardless of what settings.json currently holds. An explicit --model on the
+# command line still wins, so `claudex --model fable` keeps working.
+$ParentArguments = @()
+if ($env:DELEGATE_PARENT_MODEL) {
+    $userSetModel = $false
+    foreach ($arg in $ClaudeArguments) {
+        if ($arg -eq '--model' -or $arg -eq '-m' -or $arg -like '--model=*') { $userSetModel = $true; break }
+    }
+    if (-not $userSetModel) { $ParentArguments = @('--model', $env:DELEGATE_PARENT_MODEL) }
+}
+
+& claude @ParentArguments @ClaudeArguments
+exit $LASTEXITCODE
