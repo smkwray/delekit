@@ -48,12 +48,16 @@ built-in per-model context windows; every model gets a flat 200k budget. The
 proxy is not the limiter — it forwards the `context-1m` beta header untouched
 (a 482k session keeps getting HTTP 200 upstream).
 
-**Fix.** Use the `[1m]`-suffixed model ID, which restores the 1M budget for any
-1M-capable Claude model:
+**Fix.** Use the `[1m]`-suffixed model ID, which restores the 1M budget for a
+1M-capable Claude model. These exact IDs were verified on 2026-07-21:
 
-- Durable: `DELEGATE_PARENT_MODEL=claude-fable-5[1m]` in the local `device.env`.
-- Per session: `/model fable[1m]` — short aliases take the suffix and expand to
-  the full ID. The picker's plain "From gateway" rows stay 200k.
+- `claude-opus-4-8[1m]`
+- `claude-fable-5[1m]`
+- `claude-sonnet-5[1m]`
+
+Set one durably as `DELEGATE_PARENT_MODEL` in the local `device.env`, or select
+the suffixed ID per session. Short aliases such as `/model fable[1m]` also
+expand to the full ID. The picker's plain "From gateway" rows stay 200k.
 
 The suffix is client-side only: Claude Code strips it from the wire and sends
 the clean ID plus the `context-1m` beta header. Verify with `/context` — expect
@@ -64,6 +68,68 @@ the fix failed.
 **Trap.** The delegate aliases route to non-Claude upstreams, so `[1m]` does
 not apply to them; their windows are whatever the provider grants the upstream
 model.
+
+---
+
+## Tandy reaches the provider limit without compacting **[all]**
+
+**Symptom.** A long `tandy-*` run ends with *"Your input exceeds the context
+window of this model"*. Its transcript has no `compact_boundary`, even though
+Claude Code documents automatic compaction for subagents.
+
+**Cause.** Claude Code gives an unknown gateway alias a nominal 200k window but
+leaves it on reactive compaction: it waits for the provider to report a
+recognized prompt-too-long error. CLIProxyAPI translates the Codex context
+overflow to an ordinary HTTP 400 with *"Your input exceeds the context
+window"*. Claude Code does not classify that combination as prompt-too-long,
+so the subagent ends instead of compacting. The visible 200k `/context` budget
+alone is therefore not proof that a custom subagent will compact.
+
+**Fix.** Tandy's client aliases use the recognized
+`claude-sonnet-4-6-tandy-*` family. Claude Code consequently applies its native
+200k Sonnet 4.6 preflight path and compacts before the provider rejects the
+request. Every Codex OAuth alias also sets `force-mapping: true` so responses
+retain the full client-visible alias. In a live native test, the same Tandy
+subagent compacted from 21,538 to 2,636 tokens under a deliberately lowered
+test threshold, continued working, and ended normally.
+
+The production fallback remains the proven 200k path. An opt-in
+`DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` profile seeds undocumented Claude
+Code client-data/cache fields, giving canonical Sonnet 4.6 both a 272k assumed
+maximum and a proactive 272k compact window. The launcher isolates that state
+under the local `delekit/claude-profile`, requires token authentication, and
+removes the process-wide context variables. Opus 4.8, Fable 5, and Sonnet 5
+`[1m]` parents use other canonical families and retain their full windows.
+
+This is family-scoped, not alias-scoped: a Sonnet 4.6 parent in the isolated
+profile will also compact at 272k. It relies on the internal
+`kelp_forest_sonnet`, `rowan_thicket`, and `autoCompactWindowsCache` fields and
+must be revalidated after every Claude Code update. Claude Code 2.1.217 on
+macOS was verified to show `29k/272k`, a 33k reserve, and an `auto (272k)`
+window for `claude-sonnet-4-6-tandy-luna`. A live CLIProxyAPI/native-agent test
+then produced one automatic boundary from 26,337 to 2,218 tokens in agent
+`af037d0e90b92b144`; that same agent executed a Bash tool after the boundary and
+returned its preserved nonce plus `TANDY_DONE`. The parent remained Opus 4.8
+`[1m]`. This transcript proof—not the meter alone—is the acceptance gate.
+
+There are intentionally nine Tandy definitions: Terra, Luna, and Sol, each in
+current-checkout writer, isolated-worktree writer, and readonly form. Those
+capability suffixes change permissions/isolation only; all nine canonicalize to
+Sonnet 4.6 and therefore share this compact-window behavior. The renderer test
+requires that exact set, so a stale or extra definition fails validation.
+
+Do not substitute `CLAUDE_CODE_MAX_CONTEXT_TOKENS=272000`; an unknown alias
+still stays reactive. Do not set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=272000`; it
+is process-wide and caps the 1M parent too. A synthetic overflow immediately
+after only one tool/result group also cannot compact; Claude Code needs enough
+compactable history.
+
+After an alias or proxy update, verify `/v1/models` contains all three
+`claude-sonnet-4-6-tandy-*` aliases and that a fresh native Tandy transcript
+records a `compact_boundary` and continues in the same agent. Existing failed
+agents keep the old model identity and oversized history; start a fresh agent.
+To roll back the experiment, remove `DELEKIT_TANDY_CONTEXT_MODE` from the local
+`device.env`; the ordinary 200k profile is unchanged.
 
 ---
 

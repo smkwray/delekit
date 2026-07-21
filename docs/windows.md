@@ -16,6 +16,7 @@ The installer creates directory junctions for generated agents and the Skill. Ju
 %USERPROFILE%\.claude\skills\orchestrate-delegates
 %USERPROFILE%\bin\claudex.cmd
 %LOCALAPPDATA%\delekit\device.env
+%LOCALAPPDATA%\delekit\claude-profile
 ```
 
 Populate only the local `device.env`, including `DELEGATE_PARENT_MODEL`. The
@@ -25,9 +26,16 @@ gateway-only alias into the **global** settings file and breaks every
 non-gateway launch. See [known-issues.md](known-issues.md). Apart from that the
 launcher applies the same gateway compatibility defaults as macOS.
 
+The experimental 272k Tandy profile is enabled with
+`DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` in the local `device.env`. It uses
+the isolated `claude-profile` above, requires `ANTHROPIC_AUTH_TOKEN`, and leaves
+the ordinary 200k profile untouched. Remove the line to roll back. Revalidate
+the same-agent compaction transcript after every Claude Code update.
+
 Add `ccg` from `bin\ccg-snippet.ps1` to your `$PROFILE`, alongside your existing
 launcher rather than replacing it, and pin that existing launcher to its own
-model for the same reason.
+model for the same reason. The function must resolve the installed `claudex`
+wrapper; its direct `claude` fallback cannot prepare the isolated 272k profile.
 
 To run the proxy at login, put a one-line hidden launcher in the Startup folder
 (`shell:startup`). Build the command with `Chr(34)` for quoting; nested doubled

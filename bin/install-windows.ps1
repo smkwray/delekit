@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $KitRoot = Split-Path -Parent $PSScriptRoot
 $ClaudeHome = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }
 $DeviceDir = Join-Path $env:LOCALAPPDATA 'delekit'
+$GatewayClaudeHome = Join-Path $DeviceDir 'claude-profile'
 
 function Get-PythonCommand {
     foreach ($candidate in @('py', 'python', 'python3')) {
@@ -25,6 +26,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Kit verification failed.' }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $ClaudeHome 'agents') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $ClaudeHome 'skills') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $GatewayClaudeHome 'agents') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $GatewayClaudeHome 'skills') | Out-Null
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DeviceDir | Out-Null
 
@@ -99,6 +102,10 @@ function Install-CommandWrapper {
 
 Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $ClaudeHome 'agents\delekit')
 Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $ClaudeHome 'skills\orchestrate-delegates')
+if (-not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
+    Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $GatewayClaudeHome 'agents\delekit')
+    Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $GatewayClaudeHome 'skills\orchestrate-delegates')
+}
 
 $ClaudeXTarget = Join-Path $KitRoot 'bin\claudex.ps1'
 $DairyTarget = Join-Path $KitRoot 'bin\dairy.ps1'

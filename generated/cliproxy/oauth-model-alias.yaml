@@ -3,8 +3,11 @@
 oauth-model-alias:
   codex:
     - name: "gpt-5.6-terra"
-      alias: "claude-delegate-terra"
+      alias: "claude-sonnet-4-6-tandy-terra"
+      force-mapping: true
     - name: "gpt-5.6-luna"
-      alias: "claude-delegate-luna"
+      alias: "claude-sonnet-4-6-tandy-luna"
+      force-mapping: true
     - name: "gpt-5.6-sol"
-      alias: "claude-delegate-sol"
+      alias: "claude-sonnet-4-6-tandy-sol"
+      force-mapping: true

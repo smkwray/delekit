@@ -26,6 +26,21 @@ No agent, Skill, prompt convention, or launcher needs editing.
 
 Aliases are the kit's internal API. Keep them stable where possible. When changing one, rerender, update the proxy, restart Claude Code, and update any natural-language convention that mentions the old alias.
 
+The native Tandy aliases use the `claude-sonnet-4-6-tandy-*` namespace even
+though their provider models are GPT. Claude Code canonicalizes that prefix to
+the recognized Sonnet 4.6 family and therefore runs native preflight compaction
+for the subagent's 200k client window. CLIProxyAPI still routes the full alias
+to the `DELEGATE_MODEL_*` target, and `force-mapping` preserves the alias in the
+response so Claude Code does not lose that identity.
+
+Do not replace this with an unknown gateway alias merely to change the context
+meter. Unknown aliases use reactive compaction. The optional
+`clientdata-272k` mode keeps this recognized alias and seeds the canonical
+Sonnet 4.6 maximum and compact window inside a dedicated Claude profile. That
+scope is why Opus 4.8, Fable 5, and Sonnet 5 `[1m]` parents remain unaffected;
+a Sonnet 4.6 parent would not. A process-wide `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+would cap every parent and is removed by the launcher.
+
 The default aliases begin with `claude-`. Claude Code's gateway model discovery currently filters `/v1/models` and adds only IDs beginning with `claude` or `anthropic` to `/model`.
 
 ## OAuth versus API keys

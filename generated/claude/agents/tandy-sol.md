@@ -1,7 +1,7 @@
 ---
 name: tandy-sol
 description: Read-write delegate (sol profile) in the current checkout.
-model: claude-delegate-sol
+model: claude-sonnet-4-6-tandy-sol
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

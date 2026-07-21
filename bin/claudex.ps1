@@ -37,6 +37,9 @@ if (-not $env:ANTHROPIC_AUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
 }
 
 Remove-Item Env:CLAUDE_CODE_SUBAGENT_MODEL -ErrorAction SilentlyContinue
+Remove-Item Env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -ErrorAction SilentlyContinue
+Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
+Remove-Item Env:DISABLE_COMPACT -ErrorAction SilentlyContinue
 if (-not $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) {
     $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
 }
@@ -50,6 +53,29 @@ if (-not $env:ENABLE_TOOL_SEARCH) {
     $env:ENABLE_TOOL_SEARCH = 'false'
 }
 $env:DELEKIT_ROOT = $KitRoot
+
+$ContextMode = if ($env:DELEKIT_TANDY_CONTEXT_MODE) { $env:DELEKIT_TANDY_CONTEXT_MODE } else { 'native-200k' }
+switch ($ContextMode) {
+    { $_ -eq 'native-200k' -or $_ -eq '' } { break }
+    'clientdata-272k' {
+        if (-not $env:ANTHROPIC_AUTH_TOKEN) {
+            throw 'clientdata-272k requires ANTHROPIC_AUTH_TOKEN.'
+        }
+        Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+        $env:CLAUDE_CONFIG_DIR = Join-Path $env:LOCALAPPDATA 'delekit\claude-profile'
+        $Python = @('py', 'python', 'python3') |
+            Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
+            Select-Object -First 1
+        if (-not $Python) { throw 'clientdata-272k requires Python 3.' }
+        & $Python (Join-Path $KitRoot 'tools\seed_claude_context_cache.py')
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to seed the Claude Code context cache.' }
+        if (-not (Test-Path -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'agents\delekit'))) {
+            throw 'The isolated 272k profile is not installed. Run bin\install-windows.ps1.'
+        }
+        break
+    }
+    default { throw "Unknown DELEKIT_TANDY_CONTEXT_MODE: $ContextMode" }
+}
 
 # Claude Code persists a /model choice into the *global* user settings file, so
 # picking a gateway-only alias inside a gateway session leaks it to every later

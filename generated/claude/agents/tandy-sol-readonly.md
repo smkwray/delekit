@@ -1,7 +1,7 @@
 ---
 name: tandy-sol-readonly
 description: Read-only delegate (sol profile) for investigation and analysis; makes no changes.
-model: claude-delegate-sol
+model: claude-sonnet-4-6-tandy-sol
 permissionMode: plan
 tools:
   - Read

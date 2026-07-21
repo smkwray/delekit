@@ -1,7 +1,7 @@
 ---
 name: tandy-luna
 description: Read-write delegate (luna profile) in the current checkout.
-model: claude-delegate-luna
+model: claude-sonnet-4-6-tandy-luna
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

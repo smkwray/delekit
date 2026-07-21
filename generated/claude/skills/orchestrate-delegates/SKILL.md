@@ -23,7 +23,7 @@ generic subagent on the session's own model, in the main checkout, with no
 worktree. Nothing in the transcript says so.
 
 Verify rather than assume. A delegate asked to state its model answers with its
-gateway alias (`claude-delegate-terra` and friends); a silent fallback
+gateway alias (`claude-sonnet-4-6-tandy-terra` and friends); a silent fallback
 answers with the session model instead. If a delegate's first report does not
 look like it ran where you sent it, check before trusting the work.
 

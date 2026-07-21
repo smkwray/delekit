@@ -108,6 +108,7 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
             [
                 f"    - name: {yaml_quote(values[f'DELEGATE_MODEL_{role}'])}",
                 f"      alias: {yaml_quote(values[f'DELEGATE_ALIAS_{role}'])}",
+                "      force-mapping: true",
             ]
         )
     outputs[GENERATED_PROXY_DIR / "oauth-model-alias.yaml"] = "\n".join(oauth_lines) + "\n"
@@ -150,6 +151,7 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
     for role in roles:
         config_lines.append(f"    - name: {yaml_quote(values[f'DELEGATE_MODEL_{role}'])}")
         config_lines.append(f"      alias: {yaml_quote(values[f'DELEGATE_ALIAS_{role}'])}")
+        config_lines.append("      force-mapping: true")
         shown = values.get(f"CLIPROXY_DISPLAY_{role}", "")
         if shown:
             config_lines.append(f"      display-name: {yaml_quote(shown)}")

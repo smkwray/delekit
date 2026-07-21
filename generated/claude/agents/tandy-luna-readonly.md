@@ -1,7 +1,7 @@
 ---
 name: tandy-luna-readonly
 description: Read-only delegate (luna profile) for investigation and analysis; makes no changes.
-model: claude-delegate-luna
+model: claude-sonnet-4-6-tandy-luna
 permissionMode: plan
 tools:
   - Read

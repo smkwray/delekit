@@ -6,6 +6,7 @@ KIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 BIN_DIR="${HOME}/.local/bin"
 DEVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/delekit"
+GATEWAY_CLAUDE_HOME="$DEVICE_DIR/claude-profile"
 COPY_MODE=0
 
 usage() {
@@ -31,7 +32,9 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 is required to render the 
 python3 "$KIT_ROOT/tools/render_config.py"
 python3 "$KIT_ROOT/tools/verify_kit.py"
 
-mkdir -p "$CLAUDE_HOME/agents" "$CLAUDE_HOME/skills" "$BIN_DIR" "$DEVICE_DIR"
+mkdir -p "$CLAUDE_HOME/agents" "$CLAUDE_HOME/skills" \
+  "$GATEWAY_CLAUDE_HOME/agents" "$GATEWAY_CLAUDE_HOME/skills" \
+  "$BIN_DIR" "$DEVICE_DIR"
 
 wire_dir() {
   local source="$1" target="$2"
@@ -103,6 +106,10 @@ wire_file() {
 
 wire_dir "$KIT_ROOT/generated/claude/agents" "$CLAUDE_HOME/agents/delekit"
 wire_dir "$KIT_ROOT/generated/claude/skills/orchestrate-delegates" "$CLAUDE_HOME/skills/orchestrate-delegates"
+if [[ "$GATEWAY_CLAUDE_HOME" != "$CLAUDE_HOME" ]]; then
+  wire_dir "$KIT_ROOT/generated/claude/agents" "$GATEWAY_CLAUDE_HOME/agents/delekit"
+  wire_dir "$KIT_ROOT/generated/claude/skills/orchestrate-delegates" "$GATEWAY_CLAUDE_HOME/skills/orchestrate-delegates"
+fi
 wire_file "$KIT_ROOT/bin/claudex.sh" "$BIN_DIR/claudex"
 wire_file "$KIT_ROOT/bin/dairy.sh" "$BIN_DIR/dairy"
 wire_file "$KIT_ROOT/bin/prune-worktrees.sh" "$BIN_DIR/prune-worktrees"

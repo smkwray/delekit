@@ -20,6 +20,10 @@ for agent in "$ROOT"/generated/claude/agents/*.md; do
   assert_file "$TMP/claude/agents/delekit/$(basename "$agent")"
 done
 assert_file "$TMP/claude/skills/orchestrate-delegates/SKILL.md"
+for agent in "$ROOT"/generated/claude/agents/*.md; do
+  assert_file "$TMP/xdg/delekit/claude-profile/agents/delekit/$(basename "$agent")"
+done
+assert_file "$TMP/xdg/delekit/claude-profile/skills/orchestrate-delegates/SKILL.md"
 assert_grep "exec $ROOT/bin/claudex.sh" "$TMP/bin/claudex"
 
 mkdir -p "$TMP/fake"
@@ -33,6 +37,11 @@ print(json.dumps({
     'effort': os.environ.get('CLAUDE_CODE_ALWAYS_ENABLE_EFFORT'),
     'attrib': os.environ.get('CLAUDE_CODE_ATTRIBUTION_HEADER'),
     'tools': os.environ.get('ENABLE_TOOL_SEARCH'),
+    'config_dir': os.environ.get('CLAUDE_CONFIG_DIR'),
+    'auto_window': os.environ.get('CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
+    'max_context': os.environ.get('CLAUDE_CODE_MAX_CONTEXT_TOKENS'),
+    'disable_compact': os.environ.get('DISABLE_COMPACT'),
+    'api_key': os.environ.get('ANTHROPIC_API_KEY'),
 }))
 PY
 FAKE
@@ -40,7 +49,9 @@ chmod +x "$TMP/fake/claude"
 sed -i.bak 's#replace-with-local-proxy-client-key#test-key#' "$TMP/xdg/delekit/device.env"
 rm -f "$TMP/xdg/delekit/device.env.bak"
 PATH="$TMP/fake:/usr/bin:/bin" HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" \
-  CLAUDE_CODE_SUBAGENT_MODEL=bad "$TMP/bin/claudex" --model opus > "$TMP/launch.json"
+  CLAUDE_CODE_SUBAGENT_MODEL=bad CLAUDE_CODE_AUTO_COMPACT_WINDOW=123000 \
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS=123000 DISABLE_COMPACT=1 \
+  "$TMP/bin/claudex" --model opus > "$TMP/launch.json"
 python3 - "$TMP/launch.json" <<'PY'
 import json, sys
 obj=json.load(open(sys.argv[1], encoding='utf-8'))
@@ -49,5 +60,23 @@ assert obj['subagent'] is None
 assert obj['effort'] == '1'
 assert obj['attrib'] == '0'
 assert obj['tools'] == 'false'
+assert obj['config_dir'] is None
+assert obj['auto_window'] is None
+assert obj['max_context'] is None
+assert obj['disable_compact'] is None
+PY
+
+PATH="$TMP/fake:/usr/bin:/bin" HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" \
+  DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k ANTHROPIC_API_KEY=must-be-removed \
+  "$TMP/bin/claudex" > "$TMP/launch-272k.json"
+python3 - "$TMP/launch-272k.json" "$TMP/xdg/delekit/claude-profile/.claude.json" <<'PY'
+import json, sys
+launch=json.load(open(sys.argv[1], encoding='utf-8'))
+state=json.load(open(sys.argv[2], encoding='utf-8'))
+assert launch['config_dir'].endswith('/xdg/delekit/claude-profile')
+assert launch['api_key'] is None
+assert state['clientDataCache']['kelp_forest_sonnet'] == '272000'
+assert state['clientDataCache']['rowan_thicket']['claude-sonnet-4-6'] == 272000
+assert state['autoCompactWindowsCache']['claude-sonnet-4-6'] == 272000
 PY
 printf 'mac installer and launcher smoke tests passed\n'

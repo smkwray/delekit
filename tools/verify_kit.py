@@ -27,6 +27,8 @@ REQUIRED = [
     "bin/ccg-snippet.sh",
     "bin/ccg-snippet.ps1",
     "bin/install-launchd-macos.sh",
+    "tools/seed_claude_context_cache.py",
+    "tests/test_seed_context_cache.py",
     "tests/test-macos-install.sh",
     "tests/smoke-test.ps1",
 ]
@@ -105,6 +107,8 @@ def main() -> int:
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "gateway cache optimization",
         "ENABLE_TOOL_SEARCH": "conservative gateway tool-search policy",
         "DELEGATE_PARENT_MODEL": "parent-model pin against global /model contamination",
+        "DELEKIT_TANDY_CONTEXT_MODE": "opt-in isolated 272k Tandy profile",
+        "seed_claude_context_cache.py": "seed opt-in Tandy client data",
     }
     for relative in ("bin/claudex.sh", "bin/claudex.ps1"):
         text = (ROOT / relative).read_text(encoding="utf-8")

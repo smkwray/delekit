@@ -1,7 +1,7 @@
 ---
 name: tandy-terra-worktree
 description: Read-write delegate (terra profile) isolated in its own Git worktree; use for parallel writers.
-model: claude-delegate-terra
+model: claude-sonnet-4-6-tandy-terra
 permissionMode: acceptEdits
 isolation: worktree
 disallowedTools:

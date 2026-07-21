@@ -83,6 +83,30 @@ function Read-ModelsConfig {
 if (Test-Path -LiteralPath $DeviceEnv) {
     Write-Host "OK   device env`t$DeviceEnv"
     $null = Import-SimpleEnvFile -Path $DeviceEnv
+    if ($env:DELEKIT_TANDY_CONTEXT_MODE -eq 'clientdata-272k') {
+        $profile = Join-Path $env:LOCALAPPDATA 'delekit\claude-profile'
+        if (-not $env:ANTHROPIC_AUTH_TOKEN) {
+            Write-Host 'MISS 272k auth`tANTHROPIC_AUTH_TOKEN is required'
+            $Failed = $true
+        }
+        foreach ($path in @((Join-Path $profile 'agents\delekit'), (Join-Path $profile 'skills\orchestrate-delegates'))) {
+            if (Test-Path -LiteralPath $path) { Write-Host "OK   272k profile`t$path" }
+            else { Write-Host "MISS 272k profile`t$path"; $Failed = $true }
+        }
+        $statePath = Join-Path $profile '.claude.json'
+        try {
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            if ($state.clientDataCache.kelp_forest_sonnet -ne '272000' -or
+                $state.clientDataCache.rowan_thicket.'claude-sonnet-4-6' -ne 272000 -or
+                $state.autoCompactWindowsCache.'claude-sonnet-4-6' -ne 272000) {
+                throw 'cache values are absent'
+            }
+            Write-Host "OK   272k cache`t$statePath"
+        } catch {
+            Write-Host 'MISS 272k cache`tlaunch claudex once to seed it'
+            $Failed = $true
+        }
+    }
     if (-not $env:ANTHROPIC_BASE_URL) {
         Write-Host 'MISS gateway URL`tset ANTHROPIC_BASE_URL'
         $Failed = $true

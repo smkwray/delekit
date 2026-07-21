@@ -63,6 +63,29 @@ done
 if [[ -f "$DEVICE_ENV" ]]; then
   echo "OK   device env        $DEVICE_ENV"
   load_env_file "$DEVICE_ENV"
+  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" == "clientdata-272k" ]]; then
+    profile="${XDG_CONFIG_HOME:-$HOME/.config}/delekit/claude-profile"
+    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+      echo "MISS 272k auth         ANTHROPIC_AUTH_TOKEN is required"
+      FAIL=1
+    fi
+    for path in "$profile/agents/delekit" "$profile/skills/orchestrate-delegates"; do
+      if [[ -e "$path" ]]; then echo "OK   272k profile       $path"; else echo "MISS 272k profile       $path"; FAIL=1; fi
+    done
+    if [[ -f "$profile/.claude.json" ]] && python3 - "$profile/.claude.json" <<'PY'
+import json, sys
+state=json.load(open(sys.argv[1], encoding='utf-8'))
+assert state['clientDataCache']['kelp_forest_sonnet'] == '272000'
+assert state['clientDataCache']['rowan_thicket']['claude-sonnet-4-6'] == 272000
+assert state['autoCompactWindowsCache']['claude-sonnet-4-6'] == 272000
+PY
+    then
+      echo "OK   272k cache         $profile/.claude.json"
+    else
+      echo "MISS 272k cache         launch claudex once to seed it"
+      FAIL=1
+    fi
+  fi
   if [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
     echo "MISS gateway URL       set ANTHROPIC_BASE_URL"
     FAIL=1

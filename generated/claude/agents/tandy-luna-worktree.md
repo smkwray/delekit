@@ -1,7 +1,7 @@
 ---
 name: tandy-luna-worktree
 description: Read-write delegate (luna profile) isolated in its own Git worktree; use for parallel writers.
-model: claude-delegate-luna
+model: claude-sonnet-4-6-tandy-luna
 permissionMode: acceptEdits
 isolation: worktree
 disallowedTools:

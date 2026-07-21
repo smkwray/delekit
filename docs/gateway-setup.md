@@ -99,12 +99,24 @@ CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1
 CLAUDE_CODE_ATTRIBUTION_HEADER=0
 ENABLE_TOOL_SEARCH=false
+# Optional experimental Tandy profile; omit for the production 200k fallback:
+# DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k
 ```
+
+The 272k mode requires `ANTHROPIC_AUTH_TOKEN` rather than `ANTHROPIC_API_KEY`.
+It seeds undocumented, Sonnet-4.6-family metadata in an isolated Claude profile
+and must be revalidated after every Claude Code update. It does not cap Opus
+4.8, Fable 5, or Sonnet 5 `[1m]` parents; do not use a Sonnet 4.6 parent with
+this mode. Remove the line to return immediately to native 200k compaction.
+On verification, lower `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` only for a disposable
+test session, require one agent ID plus a `compact_boundary` and a post-boundary
+tool call, then unset the override. Never persist the test override.
 
 ## 7. Install the kit and the launcher
 
 Run `bin/install-windows.ps1` or `bin/install-macos.sh` to link the generated
-agents into the Claude configuration directory.
+agents into the normal Claude configuration directory and the isolated
+`delekit/claude-profile` used by the optional 272k mode.
 
 Then add a **separate** launcher so your normal one stays direct-to-Anthropic.
 Paste the snippet for your shell into your profile:
@@ -133,11 +145,16 @@ the three delegate aliases. Then check routing end to end:
 curl -s http://127.0.0.1:8317/v1/messages \
   -H "content-type: application/json" -H "anthropic-version: 2023-06-01" \
   -H "x-api-key: <CLIENT_KEY>" \
-  -d '{"model":"claude-delegate-terra","max_tokens":32,"messages":[{"role":"user","content":"Say: ok"}]}'
+  -d '{"model":"claude-sonnet-4-6-tandy-terra","max_tokens":32,"messages":[{"role":"user","content":"Say: ok"}]}'
 ```
 
-The response `model` field should report the upstream GPT model, not the alias.
-Repeat with a Claude model ID to confirm the other channel.
+The response `model` field should report the requested
+`claude-sonnet-4-6-tandy-*` alias. This is intentional: `force-mapping` keeps
+the client-visible identity stable so Claude Code recognizes the Sonnet 4.6
+family and uses native preflight compaction. The full alias still selects the
+GPT model at the proxy. Use the proxy debug log to confirm that the request
+actually reached the upstream GPT model. Repeat with a Claude model ID to
+confirm the other channel.
 
 Finally open a new terminal, run `ccg`, and ask the session to use
 `tandy-terra-readonly`. The subagent runs on the GPT profile while the parent stays

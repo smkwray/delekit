@@ -67,6 +67,24 @@ class RenderConfigTest(unittest.TestCase):
         for path in AGENTS.glob('*.md'):
             self.assertNotRegex(path.read_text(encoding='utf-8'), r'\bgpt-[A-Za-z0-9._-]+', str(path))
 
+    def test_tandy_aliases_use_the_native_compaction_family(self) -> None:
+        # Claude Code recognizes this family and preflights compaction instead
+        # of waiting for an unknown gateway model to fail upstream.
+        aliases = [self.env[f'DELEGATE_ALIAS_{role}'] for role in ROLES]
+        self.assertEqual(len(set(aliases)), len(ROLES))
+        for alias in aliases:
+            self.assertTrue(alias.startswith('claude-sonnet-4-6-tandy-'), alias)
+
+    def test_oauth_aliases_preserve_client_model_identity(self) -> None:
+        # Keep the compatibility alias stable in responses as well as requests;
+        # otherwise transcripts and diagnostics switch to the provider ID.
+        for relative in (
+            'generated/cliproxy/config.template.yaml',
+            'generated/cliproxy/oauth-model-alias.yaml',
+        ):
+            text = (ROOT / relative).read_text(encoding='utf-8')
+            self.assertEqual(text.count('force-mapping: true'), len(ROLES), relative)
+
     def test_agent_bodies_are_lean(self) -> None:
         # These bodies are re-sent on every delegate invocation.
         for path in AGENTS.glob('*.md'):
@@ -119,6 +137,11 @@ class RenderConfigTest(unittest.TestCase):
         for name in ('claudex.sh', 'claudex.ps1'):
             text = (ROOT / 'bin' / name).read_text(encoding='utf-8')
             self.assertIn('CLAUDE_CODE_SUBAGENT_MODEL', text)
+            self.assertIn('CLAUDE_CODE_MAX_CONTEXT_TOKENS', text)
+            self.assertIn('CLAUDE_CODE_AUTO_COMPACT_WINDOW', text)
+            self.assertIn('DISABLE_COMPACT', text)
+            self.assertIn('DELEKIT_TANDY_CONTEXT_MODE', text)
+            self.assertIn('seed_claude_context_cache.py', text)
             self.assertIn('CLAUDE_CODE_ALWAYS_ENABLE_EFFORT', text)
             self.assertIn('CLAUDE_CODE_ATTRIBUTION_HEADER', text)
             self.assertIn('ENABLE_TOOL_SEARCH', text)
@@ -134,6 +157,10 @@ class RenderConfigTest(unittest.TestCase):
             self.assertIn('--model=*', text, f'{name} must detect a user-supplied --model')
         example = (ROOT / 'config' / 'device.env.example').read_text(encoding='utf-8')
         self.assertIn('DELEGATE_PARENT_MODEL=', example)
+        self.assertNotIn('CLAUDE_CODE_MAX_CONTEXT_TOKENS=', example)
+        self.assertIn('DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k', example)
+        for model in ('claude-opus-4-8[1m]', 'claude-fable-5[1m]', 'claude-sonnet-5[1m]'):
+            self.assertIn(model, example)
 
     def test_known_issues_covers_both_platforms(self) -> None:
         # This file is the only thing a new device inherits from past debugging.
@@ -148,6 +175,9 @@ class RenderConfigTest(unittest.TestCase):
         # later plain `claude` silently keeps routing through the proxy.
         posix = (ROOT / 'bin' / 'ccg-snippet.sh').read_text(encoding='utf-8')
         self.assertRegex(posix, r'ccg\(\)\s*\(', 'ccg must be a subshell function: ccg() ( ... )')
+        powershell = (ROOT / 'bin' / 'ccg-snippet.ps1').read_text(encoding='utf-8')
+        self.assertIn('finally', powershell)
+        self.assertIn('Get-Command claudex', powershell)
 
 
 if __name__ == '__main__':

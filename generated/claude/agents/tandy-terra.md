@@ -1,7 +1,7 @@
 ---
 name: tandy-terra
 description: Read-write delegate (terra profile) in the current checkout.
-model: claude-delegate-terra
+model: claude-sonnet-4-6-tandy-terra
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

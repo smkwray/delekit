@@ -32,6 +32,13 @@ function ccg {
     else {
         Write-Warning "delekit device.env not found; launching without the gateway."
     }
-    try { & claude --dangerously-skip-permissions @args }
+    try {
+        if (Get-Command claudex -ErrorAction SilentlyContinue) {
+            & claudex --dangerously-skip-permissions @args
+        } else {
+            Write-Warning 'claudex is not installed; launching without delekit profile setup.'
+            & claude --dangerously-skip-permissions @args
+        }
+    }
     finally { foreach ($k in $vars) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') } }
 }
