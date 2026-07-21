@@ -48,7 +48,10 @@ class SeedContextCacheTest(unittest.TestCase):
             first_mtime = state_path.stat().st_mtime_ns
             self.assertFalse(seed(config_dir))
             self.assertEqual(state_path.stat().st_mtime_ns, first_mtime)
-            self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o640)
+            # Windows exposes only its read-only attribute through os.chmod,
+            # so it cannot preserve POSIX group/other mode bits.
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o640)
             self.assertEqual(json.loads(state_path.read_text())["theme"], "light")
 
     def test_seed_refuses_malformed_json(self) -> None:

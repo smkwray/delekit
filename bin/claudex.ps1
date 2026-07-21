@@ -19,10 +19,10 @@ function Import-SimpleEnvFile {
         $line = $raw.Trim()
         if (-not $line -or $line.StartsWith('#')) { continue }
         $parts = $line.Split('=', 2)
-        if ($parts.Count -ne 2) { throw "Invalid line in $Path: $raw" }
+        if ($parts.Count -ne 2) { throw "Invalid line in ${Path}: $raw" }
         $key = $parts[0].Trim()
         $value = $parts[1].Trim().Trim('"').Trim("'")
-        if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "Invalid key in $Path: $key" }
+        if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "Invalid key in ${Path}: $key" }
         [Environment]::SetEnvironmentVariable($key, $value, 'Process')
     }
 }
