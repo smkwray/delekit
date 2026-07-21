@@ -36,6 +36,52 @@ belongs in agent frontmatter, where the render already puts it.
 
 ---
 
+## Every model shows a 200k context limit through the gateway **[all]**
+
+**Symptom.** `/context` in a `ccg` session reports "482.6k/200k tokens (241%)"
+in red for a model that is 1M direct-to-Anthropic. The label follows the model
+(switching Opus↔Fable mid-session moves the name but not the 200k), so it looks
+like a per-model or proxy limit. It is neither.
+
+**Cause.** With a custom `ANTHROPIC_BASE_URL`, Claude Code does not apply its
+built-in per-model context windows; every model gets a flat 200k budget. The
+proxy is not the limiter — it forwards the `context-1m` beta header untouched
+(a 482k session keeps getting HTTP 200 upstream).
+
+**Fix.** Use the `[1m]`-suffixed model ID, which restores the 1M budget for any
+1M-capable Claude model:
+
+- Durable: `DELEGATE_PARENT_MODEL=claude-fable-5[1m]` in the local `device.env`.
+- Per session: `/model fable[1m]` — short aliases take the suffix and expand to
+  the full ID. The picker's plain "From gateway" rows stay 200k.
+
+The suffix is client-side only: Claude Code strips it from the wire and sends
+the clean ID plus the `context-1m` beta header. Verify with `/context` — expect
+the suffixed ID and "/1m tokens". A literal `model[1m]` sent to the proxy
+(e.g. via curl) 502s as an unknown model; that is expected and does not mean
+the fix failed.
+
+**Trap.** The delegate aliases route to non-Claude upstreams, so `[1m]` does
+not apply to them; their windows are whatever the provider grants the upstream
+model.
+
+---
+
+## Subagents that fall back to Haiku 502 through the gateway **[all]**
+
+**Symptom.** A subagent dies with *"502 unknown provider for model
+claude-haiku-4-5-…"* in a gateway session, while the parent keeps working.
+
+**Cause.** `CLIPROXY_EXCLUDE_CLAUDE` deliberately drops `*haiku*` to keep the
+`/model` picker short, but the exclusion also removes it from routing. Some
+built-in agents and small/fast-model fallbacks request Haiku implicitly.
+
+**Fix.** Accepted trade-off; Haiku is not needed on these devices. If a
+workflow genuinely requires it, remove `*haiku*` from `CLIPROXY_EXCLUDE_CLAUDE`
+in `config/models.env`, rerender, and restart the proxy.
+
+---
+
 ## `ccg` leaking gateway credentials into the shell **[posix]**
 
 **Symptom.** A plain `claude` in the same terminal silently keeps routing

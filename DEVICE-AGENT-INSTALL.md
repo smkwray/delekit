@@ -37,7 +37,9 @@ INSTALL
    process, not just a manual start.
 8. Fill the local device.env the installer created. Set DELEGATE_PARENT_MODEL to
    a model the gateway serves; without it a /model pick inside a gateway session
-   silently breaks every non-gateway launch on this machine.
+   silently breaks every non-gateway launch on this machine. Append [1m] to a
+   1M-capable Claude model ID (e.g. claude-fable-5[1m]) or the gateway session
+   caps every model at a 200k context budget; see docs/known-issues.md.
 9. Add the ccg launcher from bin/ccg-snippet.sh or bin/ccg-snippet.ps1 ALONGSIDE
    the user's existing launcher, never replacing it. A gateway session disables the
    claude.ai connectors, so the direct launcher has to stay available. Pin that
