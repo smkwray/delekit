@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use **ordinary custom Claude Code subagents routed through CLIProxyAPI** for interactive orchestration. Keep the headless runner as a fallback.
+Use **ordinary custom Claude Code subagents routed through CLIProxyAPI** for interactive orchestration. Keep the standalone runner as a fallback.
 
 ```text
 runtime-selected Claude orchestrator

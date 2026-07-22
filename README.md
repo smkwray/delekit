@@ -1,13 +1,13 @@
 # delekit
 
-Delegate coding work to a **non-Claude model** two ways, on macOS and Windows:
+Delegate coding work from Claude Code or the terminal, on macOS and Windows:
 
 - **`tandy-*`** — ordinary Claude Code subagents running on GPT models, in the
   same session as a Claude parent, via a local
   [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) gateway.
   Interactive.
-- **`dairy`** — a headless runner that shells out to `codex` or `claude` for
-  one-shot and CI jobs. No gateway required.
+- **`dairy`** — a standalone CLI for one-shot, unattended, and CI jobs with
+  Codex or Claude. No gateway required.
 
 Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees both paths
 create.
@@ -29,7 +29,7 @@ run under distinct runtime names, and the orchestrator can message or resume any
 of them by agent ID.
 
 `tandy` needs the gateway; `dairy` and `prune-worktrees` do not. If you only want
-the headless runner, install the kit and skip the gateway steps.
+direct CLI execution, install the kit and skip the gateway steps.
 
 ## Why a gateway is required
 
@@ -69,7 +69,7 @@ Change models by editing `config/models.env` and re-rendering — never by editi
 | [docs/known-issues.md](docs/known-issues.md) | Traps that have actually bitten. Read before debugging |
 | [docs/architecture.md](docs/architecture.md) | Design, prompt budget, why it stays maintainable |
 | [docs/native-agents.md](docs/native-agents.md) | Delegating, resuming, smoke tests |
-| [docs/dairy-runner.md](docs/dairy-runner.md) | The headless `dairy` runner: modes, backends, known issues |
+| [docs/dairy-runner.md](docs/dairy-runner.md) | The `dairy` CLI: modes, backends, known issues |
 | [docs/model-aliases.md](docs/model-aliases.md) | How aliases map to providers |
 | [docs/permissions-and-stalls.md](docs/permissions-and-stalls.md) | Permission modes and avoiding hangs |
 | [DEVICE-AGENT-INSTALL.md](DEVICE-AGENT-INSTALL.md) | A brief you can hand to a local coding agent to install this for you |

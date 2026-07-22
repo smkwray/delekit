@@ -1,6 +1,6 @@
-# Fallback runner
+# Standalone runner
 
-Use `dairy.sh` or `dairy.ps1` for:
+Use the `dairy` command for:
 
 - CI, scheduled, or unattended one-shot work;
 - direct Codex execution when proxy/native-agent translation is broken;
