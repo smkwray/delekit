@@ -58,11 +58,13 @@ replacing your existing one.
    the proxy at login. Full procedure: **[docs/gateway-setup.md](docs/gateway-setup.md)**.
    Platform specifics: [docs/macos.md](docs/macos.md), [docs/windows.md](docs/windows.md).
 
-3. **Add the `ccg` launcher** from `bin/ccg-snippet.sh` or `bin/ccg-snippet.ps1`
-   *alongside* your normal one, then run `./bin/doctor-macos.sh` (or
-   `doctor-windows.ps1`) to verify. On macOS/Linux, sourcing the sibling
-   `global-agent-defaults/bin/agent-shell.sh` first also enables `ccgs`, an
-   explicitly persistent `screen` variant; plain `ccg` stays nonpersistent.
+3. **Add the `ccg` launcher.** On Windows, `install-windows.ps1 -AddToUserPath`
+   exposes the synced `bin/ccg.cmd` to both PowerShell and cmd.exe. On
+   macOS/Linux, source `bin/ccg-snippet.sh`. Keep it *alongside* your normal
+   direct launcher, then run the platform doctor to verify. On macOS/Linux,
+   sourcing the sibling `global-agent-defaults/bin/agent-shell.sh` first also
+   enables `ccgs`, an explicitly persistent `screen` variant; plain `ccg` stays
+   nonpersistent.
 
 Change models by editing `config/models.env` and re-rendering — never by editing
 `generated/`.

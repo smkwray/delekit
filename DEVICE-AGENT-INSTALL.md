@@ -42,10 +42,12 @@ INSTALL
    silently breaks every non-gateway launch on this machine. Append [1m] to a
    1M-capable Claude model ID (e.g. claude-fable-5[1m]) or the gateway session
    caps every model at a 200k context budget; see docs/known-issues.md.
-9. Add the ccg launcher from bin/ccg-snippet.sh or bin/ccg-snippet.ps1 ALONGSIDE
-   the user's existing launcher, never replacing it. A gateway session disables the
-   claude.ai connectors, so the direct launcher has to stay available. Pin that
-   launcher to its own model for the same reason as step 8.
+9. Add ccg ALONGSIDE the user's existing launcher, never replacing it. On
+   Windows, use install-windows.ps1 -AddToUserPath so the synced bin/ccg.cmd
+   works in PowerShell and cmd.exe. On POSIX, source bin/ccg-snippet.sh. A
+   gateway session disables the claude.ai connectors, so the direct launcher
+   has to stay available. Pin that launcher to its own model for the same reason
+   as step 8.
 
 CONSTRAINTS
 10. Never put gateway credentials, OAuth tokens, API keys, or auth files in the

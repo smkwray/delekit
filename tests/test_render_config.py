@@ -175,9 +175,11 @@ class RenderConfigTest(unittest.TestCase):
         # later plain `claude` silently keeps routing through the proxy.
         posix = (ROOT / 'bin' / 'ccg-snippet.sh').read_text(encoding='utf-8')
         self.assertRegex(posix, r'ccg\(\)\s*\(', 'ccg must be a subshell function: ccg() ( ... )')
+        launcher = (ROOT / 'bin' / 'ccg-launch.ps1').read_text(encoding='utf-8')
+        self.assertIn('finally', launcher)
+        self.assertIn("Join-Path $PSScriptRoot 'claudex.ps1'", launcher)
         powershell = (ROOT / 'bin' / 'ccg-snippet.ps1').read_text(encoding='utf-8')
-        self.assertIn('finally', powershell)
-        self.assertIn('Get-Command claudex', powershell)
+        self.assertIn('DelekitCcgLauncher', powershell)
 
 
 if __name__ == '__main__':

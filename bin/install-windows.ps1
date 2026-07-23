@@ -133,10 +133,17 @@ if (-not (Test-Path -LiteralPath $DeviceEnv)) {
 if ($AddToUserPath) {
     $current = [Environment]::GetEnvironmentVariable('Path', 'User')
     $entries = @($current -split ';' | Where-Object { $_ })
-    if ($entries -notcontains $BinDir) {
-        $newPath = if ($current) { "$current;$BinDir" } else { $BinDir }
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
-        Write-Host 'Added command directory to the user PATH. Open a new terminal.'
+    $added = @()
+    foreach ($pathEntry in @($BinDir, $PSScriptRoot)) {
+        if ($entries -notcontains $pathEntry) {
+            $entries += $pathEntry
+            $added += $pathEntry
+        }
+    }
+    if ($added) {
+        [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')
+        Write-Host "Added command directories to the user PATH: $($added -join ', ')"
+        Write-Host 'Open a new terminal.'
     }
 }
 

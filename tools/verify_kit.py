@@ -24,6 +24,8 @@ REQUIRED = [
     "bin/dairy.ps1",
     "bin/prune-worktrees.sh",
     "bin/claudex.ps1",
+    "bin/ccg.cmd",
+    "bin/ccg-launch.ps1",
     "bin/ccg-snippet.sh",
     "bin/ccg-snippet.ps1",
     "bin/install-launchd-macos.sh",

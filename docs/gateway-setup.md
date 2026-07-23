@@ -137,9 +137,9 @@ agents into the normal Claude configuration directory and the isolated
 `delekit/claude-profile` used by the optional 272k mode.
 
 Then add a **separate** launcher so your normal one stays direct-to-Anthropic.
-Paste the snippet for your shell into your profile:
 
-- PowerShell: `bin/ccg-snippet.ps1`
+- Windows: run `bin/install-windows.ps1 -AddToUserPath`; the synced
+  `bin/ccg.cmd` works in PowerShell and cmd.exe.
 - bash/zsh: `bin/ccg-snippet.sh`
 
 Both define `ccg`, which loads `device.env` for that launch only and leaves the

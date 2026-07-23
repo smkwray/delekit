@@ -19,6 +19,11 @@ The installer creates directory junctions for generated agents and the Skill. Ju
 %LOCALAPPDATA%\delekit\claude-profile
 ```
 
+With `-AddToUserPath`, the installer also adds the synced `delekit\bin`
+directory to the user PATH. This exposes `ccg.cmd` directly in both PowerShell
+and `cmd.exe`; its implementation remains in the synced kit and cannot drift
+between shell profiles.
+
 Populate only the local `device.env`, including `DELEGATE_PARENT_MODEL`. The
 launcher keeps the parent model runtime-selected — an explicit `--model` always
 wins — but without that pin a `/model` pick inside a gateway session writes a
@@ -32,10 +37,9 @@ the isolated `claude-profile` above, requires `ANTHROPIC_AUTH_TOKEN`, and leaves
 the ordinary 200k profile untouched. Remove the line to roll back. Revalidate
 the same-agent compaction transcript after every Claude Code update.
 
-Add `ccg` from `bin\ccg-snippet.ps1` to your `$PROFILE`, alongside your existing
-launcher rather than replacing it, and pin that existing launcher to its own
-model for the same reason. The function must resolve the installed `claudex`
-wrapper; its direct `claude` fallback cannot prepare the isolated 272k profile.
+Older profile-based installs may dot-source `bin\ccg-snippet.ps1`, but new
+Windows installs should use the PATH command installed above. Leave the direct
+Claude launcher available and pin it to its own model for the same reason.
 
 To run the proxy at login, put a one-line hidden launcher in the Startup folder
 (`shell:startup`). Build the command with `Chr(34)` for quoting; nested doubled
