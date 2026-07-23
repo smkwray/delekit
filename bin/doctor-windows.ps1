@@ -102,12 +102,13 @@ function Test-AutoCompactCap {
 if (Test-Path -LiteralPath $DeviceEnv) {
     Write-Host "OK   device env`t$DeviceEnv"
     $null = Import-SimpleEnvFile -Path $DeviceEnv
-    if ($env:DELEKIT_TANDY_CONTEXT_MODE -eq 'clientdata-272k') {
+    $ContextMode = if ($env:DELEKIT_TANDY_CONTEXT_MODE) { $env:DELEKIT_TANDY_CONTEXT_MODE } else { 'clientdata-272k' }
+    if ($ContextMode -eq 'clientdata-272k') {
         Test-AutoCompactCap -SettingsPath (Join-Path $env:LOCALAPPDATA 'delekit\claude-profile\settings.json') -Label '272k profile'
     } else {
         Test-AutoCompactCap -SettingsPath (Join-Path $ClaudeHome 'settings.json') -Label 'user'
     }
-    if ($env:DELEKIT_TANDY_CONTEXT_MODE -eq 'clientdata-272k') {
+    if ($ContextMode -eq 'clientdata-272k') {
         $profile = Join-Path $env:LOCALAPPDATA 'delekit\claude-profile'
         if (-not $env:ANTHROPIC_AUTH_TOKEN) {
             Write-Host 'MISS 272k auth`tANTHROPIC_AUTH_TOKEN is required'

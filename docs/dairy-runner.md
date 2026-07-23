@@ -90,6 +90,8 @@ Use `--dirty-policy ignore` or `-DirtyPolicy ignore` only with awareness that un
 
 Codex `read-only` and `workspace-write` runs use the selected sandbox with `approval_policy=never`, so blocked operations fail instead of prompting. `danger-full-access` uses Codex's explicit bypass flag. Claude and Gemini backends cannot reproduce every Codex sandbox boundary; use them only when their CLI's permission behavior is acceptable.
 
+**Computer use requires `full` mode.** Launching or scripting GUI apps — `open -a`, `osascript`/AppleScript, browsers — is blocked by the sandbox in `workspace-write` and `read-only`, so those tasks fail with permission errors rather than prompting. `full` runs unsandboxed; grant it only when the task genuinely needs the machine, and expect the worker to report every external effect (the access preamble instructs it to).
+
 ---
 
 # Known issues

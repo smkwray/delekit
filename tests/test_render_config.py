@@ -158,7 +158,9 @@ class RenderConfigTest(unittest.TestCase):
         example = (ROOT / 'config' / 'device.env.example').read_text(encoding='utf-8')
         self.assertIn('DELEGATE_PARENT_MODEL=', example)
         self.assertNotIn('CLAUDE_CODE_MAX_CONTEXT_TOKENS=', example)
-        self.assertIn('DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k', example)
+        self.assertRegex(example, r'(?m)^DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k$')
+        self.assertIn('DELEKIT_TANDY_CONTEXT_MODE:-clientdata-272k', (ROOT / 'bin' / 'claudex.sh').read_text(encoding='utf-8'))
+        self.assertIn("else { 'clientdata-272k' }", (ROOT / 'bin' / 'claudex.ps1').read_text(encoding='utf-8'))
         for model in ('claude-opus-4-8[1m]', 'claude-fable-5[1m]', 'claude-sonnet-5[1m]'):
             self.assertIn(model, example)
 

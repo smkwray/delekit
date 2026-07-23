@@ -27,7 +27,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Kit verification failed.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $ClaudeHome 'agents') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $ClaudeHome 'skills') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $GatewayClaudeHome 'agents') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $GatewayClaudeHome 'skills') | Out-Null
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $DeviceDir | Out-Null
 
@@ -104,7 +103,38 @@ Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Ta
 Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $ClaudeHome 'skills\orchestrate-delegates')
 if (-not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
     Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $GatewayClaudeHome 'agents\delekit')
-    Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $GatewayClaudeHome 'skills\orchestrate-delegates')
+    $normalSkills = Join-Path $ClaudeHome 'skills'
+    $gatewaySkills = Join-Path $GatewayClaudeHome 'skills'
+    if (-not $Copy -and (Test-Path -LiteralPath $gatewaySkills)) {
+        $gatewaySkillsItem = Get-Item -LiteralPath $gatewaySkills -Force
+        if (-not $gatewaySkillsItem.LinkType) {
+            # Migrate the legacy layout only when it contains exactly the one
+            # managed delekit junction. Never remove profile-specific content.
+            $children = @(Get-ChildItem -LiteralPath $gatewaySkills -Force)
+            $legacy = Join-Path $gatewaySkills 'orchestrate-delegates'
+            $legacyItem = Get-Item -LiteralPath $legacy -Force -ErrorAction SilentlyContinue
+            $legacySource = Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates'
+            $managedLegacy = $children.Count -eq 1 -and $legacyItem -and
+                $legacyItem.LinkType -in @('Junction','SymbolicLink') -and
+                (Test-SamePath -Left @($legacyItem.Target)[0] -Right $legacySource)
+            if ($managedLegacy) {
+                $legacyItem.Delete()
+                Remove-Item -LiteralPath $gatewaySkills
+                Write-Host "Migrated isolated skills directory: $gatewaySkills"
+            } else {
+                throw "Refusing to replace isolated skills directory with unmanaged content: $gatewaySkills"
+            }
+        }
+    }
+    if ($Copy) {
+        New-Item -ItemType Directory -Force -Path $gatewaySkills | Out-Null
+        Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $gatewaySkills 'orchestrate-delegates')
+    } else {
+        # The isolated 272k profile shares the normal Claude skill collection.
+        # New canonical skills therefore appear in both profiles without a
+        # second per-skill link set that can drift.
+        Install-DirectoryLink -Source $normalSkills -Target $gatewaySkills
+    }
 }
 
 $ClaudeXTarget = Join-Path $KitRoot 'bin\claudex.ps1'

@@ -147,6 +147,13 @@ Core opts mirror `dairy`: `--backend codex|claude`, `--profile terra|luna|sol`
 `--no-preamble`, `--json`. Access→sandbox/permission mapping and the access
 preamble are lifted verbatim from `dairy` so the two runners stay consistent.
 
+**Computer use requires `full` mode**, exactly as in `dairy`: the sandbox in
+`workspace`/`readonly` blocks `open -a`, `osascript`, and browser control, so GUI
+tasks fail with permission errors rather than prompting. `full` runs unsandboxed
+— grant it only when the task genuinely needs the machine. `herd` is the better
+fit for GUI sessions than `dairy`: `send` steers the *same* worker across turns,
+so it keeps driving the window it opened instead of starting blind.
+
 ## Backend adapters
 
 Both stream JSON so we can scrape the session id and observe activity live —

@@ -85,12 +85,12 @@ print(v if isinstance(v,int) else '')" "$settings")"
 if [[ -f "$DEVICE_ENV" ]]; then
   echo "OK   device env        $DEVICE_ENV"
   load_env_file "$DEVICE_ENV"
-  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" == "clientdata-272k" ]]; then
+  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-clientdata-272k}" == "clientdata-272k" ]]; then
     check_autocompact_cap "${XDG_CONFIG_HOME:-$HOME/.config}/delekit/claude-profile/settings.json" "272k profile"
   else
     check_autocompact_cap "$CLAUDE_HOME/settings.json" "user"
   fi
-  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" == "clientdata-272k" ]]; then
+  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-clientdata-272k}" == "clientdata-272k" ]]; then
     profile="${XDG_CONFIG_HOME:-$HOME/.config}/delekit/claude-profile"
     if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
       echo "MISS 272k auth         ANTHROPIC_AUTH_TOKEN is required"

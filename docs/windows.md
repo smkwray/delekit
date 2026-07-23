@@ -19,6 +19,10 @@ The installer creates directory junctions for generated agents and the Skill. Ju
 %LOCALAPPDATA%\delekit\claude-profile
 ```
 
+The isolated profile's `skills` directory junctions to the normal Claude
+`skills` directory. The 272k `ccg` profile therefore sees the same shared and
+delekit skills as ordinary Claude, including skills added later.
+
 With `-AddToUserPath`, the installer also adds the synced `delekit\bin`
 directory to the user PATH. This exposes `ccg.cmd` directly in both PowerShell
 and `cmd.exe`; its implementation remains in the synced kit and cannot drift
@@ -31,11 +35,11 @@ gateway-only alias into the **global** settings file and breaks every
 non-gateway launch. See [known-issues.md](known-issues.md). Apart from that the
 launcher applies the same gateway compatibility defaults as macOS.
 
-The experimental 272k Tandy profile is enabled with
-`DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` in the local `device.env`. It uses
-the isolated `claude-profile` above, requires `ANTHROPIC_AUTH_TOKEN`, and leaves
-the ordinary 200k profile untouched. Remove the line to roll back. Revalidate
-the same-agent compaction transcript after every Claude Code update.
+The default 272k Tandy mode uses the dedicated `claude-profile` above, requires
+`ANTHROPIC_AUTH_TOKEN`, and leaves the ordinary Claude profile untouched.
+`DELEKIT_TANDY_CONTEXT_MODE=native-200k` is the explicit compatibility
+fallback. Revalidate the same-agent compaction transcript after every Claude
+Code update.
 
 Older profile-based installs may dot-source `bin\ccg-snippet.ps1`, but new
 Windows installs should use the PATH command installed above. Leave the direct

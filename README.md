@@ -94,8 +94,9 @@ Change models by editing `config/models.env` and re-rendering — never by editi
 - Gateway aliases intentionally begin with `claude-`, because Claude Code filters
   gateway model discovery by that prefix.
 - Credentials live in one local `device.env` per machine, never in the repo.
-- Tandy defaults to the proven native 200k compact path. An isolated,
-  undocumented `clientdata-272k` profile is opt-in and upgrade-gated; see
+- Tandy defaults to the dedicated `clientdata-272k` profile. The
+  `native-200k` path remains an explicit compatibility fallback; revalidate the
+  272k client behavior after Claude Code upgrades as described in
   [known issues](docs/known-issues.md).
 
 Deliberately omitted: any large global `CLAUDE.md` block (subagents already

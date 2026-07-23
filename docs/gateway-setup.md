@@ -117,15 +117,15 @@ CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1
 CLAUDE_CODE_ATTRIBUTION_HEADER=0
 ENABLE_TOOL_SEARCH=false
-# Optional experimental Tandy profile; omit for the production 200k fallback:
-# DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k
+DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k
 ```
 
-The 272k mode requires `ANTHROPIC_AUTH_TOKEN` rather than `ANTHROPIC_API_KEY`.
-It seeds undocumented, Sonnet-4.6-family metadata in an isolated Claude profile
-and must be revalidated after every Claude Code update. It does not cap Opus
-4.8, Fable 5, or Sonnet 5 `[1m]` parents; do not use a Sonnet 4.6 parent with
-this mode. Remove the line to return immediately to native 200k compaction.
+The default 272k mode requires `ANTHROPIC_AUTH_TOKEN` rather than
+`ANTHROPIC_API_KEY`. It seeds Sonnet-4.6-family metadata in a dedicated Claude
+profile and must be revalidated after every Claude Code update. It does not cap
+Opus 4.8, Fable 5, or Sonnet 5 `[1m]` parents; do not use a Sonnet 4.6 parent
+with this mode. Set `DELEKIT_TANDY_CONTEXT_MODE=native-200k` to use the
+compatibility fallback.
 On verification, lower `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` only for a disposable
 test session, require one agent ID plus a `compact_boundary` and a post-boundary
 tool call, then unset the override. Never persist the test override.
@@ -134,7 +134,7 @@ tool call, then unset the override. Never persist the test override.
 
 Run `bin/install-windows.ps1` or `bin/install-macos.sh` to link the generated
 agents into the normal Claude configuration directory and the isolated
-`delekit/claude-profile` used by the optional 272k mode.
+`delekit/claude-profile` used by the default 272k mode.
 
 Then add a **separate** launcher so your normal one stays direct-to-Anthropic.
 

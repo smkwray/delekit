@@ -52,7 +52,7 @@ export CLAUDE_CODE_ATTRIBUTION_HEADER="${CLAUDE_CODE_ATTRIBUTION_HEADER:-0}"
 export ENABLE_TOOL_SEARCH="${ENABLE_TOOL_SEARCH:-false}"
 export DELEKIT_ROOT="$KIT_ROOT"
 
-case "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" in
+case "${DELEKIT_TANDY_CONTEXT_MODE:-clientdata-272k}" in
   native-200k|"") ;;
   clientdata-272k)
     : "${ANTHROPIC_AUTH_TOKEN:?clientdata-272k requires ANTHROPIC_AUTH_TOKEN}"

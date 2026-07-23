@@ -43,3 +43,14 @@ a non-interactive command.
 Run independent workers in parallel, never overlapping writers in one checkout.
 Review and integrate worktrees serially. The orchestrator owns final judgment and
 merging.
+
+Two headless runners exist outside this session, no gateway needed: `dairy`
+(one-shot, blocks until done) and `herd` (detached; spawn returns at once, then
+list/status/result/send/kill — send resumes the same conversation, so use herd
+when work may need steering or a follow-up). Both take a first positional mode:
+workspace (write in the project), readonly, or full. **Computer use — launching
+or scripting GUI apps (open, osascript, browsers) — requires full mode**; the
+default sandbox blocks it, tasks fail with permission errors, and full runs
+unsandboxed, so grant it only for tasks that genuinely need the machine. Pick
+models with the same profile words (terra, luna, sol) via the profile flag.
+Run either command with no arguments for usage.

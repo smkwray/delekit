@@ -17,7 +17,7 @@ Creates:
 ~/.claude/skills/orchestrate-delegates         symlink to the generated Skill
 ~/.local/bin/claudex                           symlink to the launcher
 ~/.config/delekit/device.env              local-only gateway settings
-~/.config/delekit/claude-profile          isolated optional 272k profile
+~/.config/delekit/claude-profile          dedicated default 272k profile
 ```
 
 Ensure `~/.local/bin` is on `PATH`. The installer does not modify shell
@@ -31,17 +31,12 @@ copies must be reinstalled after each render.
 If `~/.claude/agents` did not exist before the install, start one new Claude
 Code session so the directory is picked up.
 
-To try the experimental Tandy window, add this to the local `device.env`:
-
-```text
-DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k
-```
-
-The launcher seeds the isolated profile atomically before Claude Code starts.
+The launcher defaults to `DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` and seeds
+the dedicated profile atomically before Claude Code starts.
 It does not modify `~/.claude.json` or the normal `~/.claude` profile. Remove
-the line to roll back to the proven 200k path. Because the seed uses
-undocumented Claude Code fields, rerun the `/context` and same-agent compaction
-checks after every Claude Code upgrade.
+Set `DELEKIT_TANDY_CONTEXT_MODE=native-200k` only to use the compatibility
+fallback. Rerun the `/context` and same-agent compaction checks after every
+Claude Code upgrade.
 
 ## Installing CLIProxyAPI
 

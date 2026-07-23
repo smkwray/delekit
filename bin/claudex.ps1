@@ -54,7 +54,7 @@ if (-not $env:ENABLE_TOOL_SEARCH) {
 }
 $env:DELEKIT_ROOT = $KitRoot
 
-$ContextMode = if ($env:DELEKIT_TANDY_CONTEXT_MODE) { $env:DELEKIT_TANDY_CONTEXT_MODE } else { 'native-200k' }
+$ContextMode = if ($env:DELEKIT_TANDY_CONTEXT_MODE) { $env:DELEKIT_TANDY_CONTEXT_MODE } else { 'clientdata-272k' }
 switch ($ContextMode) {
     { $_ -eq 'native-200k' -or $_ -eq '' } { break }
     'clientdata-272k' {
