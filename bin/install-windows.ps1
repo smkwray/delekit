@@ -109,9 +109,11 @@ if (-not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
 
 $ClaudeXTarget = Join-Path $KitRoot 'bin\claudex.ps1'
 $DairyTarget = Join-Path $KitRoot 'bin\dairy.ps1'
+$HerdTarget = Join-Path $KitRoot 'bin\herd.ps1'
 $ClaudeXWrapper = Join-Path $BinDir 'claudex.cmd'
 Install-CommandWrapper -Path $ClaudeXWrapper -Target $ClaudeXTarget
 Install-CommandWrapper -Path (Join-Path $BinDir 'dairy.cmd') -Target $DairyTarget
+Install-CommandWrapper -Path (Join-Path $BinDir 'herd.cmd') -Target $HerdTarget
 
 $DeviceEnv = Join-Path $DeviceDir 'device.env'
 # Carry over a device.env from the pre-rename location so a switchover keeps the

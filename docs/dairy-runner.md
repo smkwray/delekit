@@ -25,19 +25,19 @@ The runner prepends one short access line and, when applicable, one worktree lin
 
 ## Profiles and central model mapping
 
-For Codex, `--profile default|fast|deep` and `-Profile` resolve model and effort from `config/models.env`. `--model`/`-Model` and `--effort`/`-Effort` override a single run. Claude and Gemini model choices remain explicit because their provider defaults are better handled by their own CLIs.
+For Codex, `--profile terra|luna|sol` and `-Profile` resolve model and effort from `config/models.env` (`terra` is the default). `--model`/`-Model` and `--effort`/`-Effort` override a single run. Claude and Gemini model choices remain explicit because their provider defaults are better handled by their own CLIs.
 
 ## Examples
 
 ```bash
-dairy write --profile default --prompt-file task.md --worktree
-dairy read --profile deep --prompt-stdin < audit.md
+dairy write --profile terra --prompt-file task.md --worktree
+dairy read --profile sol --prompt-stdin < audit.md
 dairy full --model explicit-provider-id --prompt 'authorized host task'
 ```
 
 ```powershell
-dairy write -Profile default -PromptFile task.md -Worktree
-Get-Content audit.md -Raw | dairy read -Profile deep -PromptStdin
+dairy write -Profile terra -PromptFile task.md -Worktree
+Get-Content audit.md -Raw | dairy read -Profile sol -PromptStdin
 dairy full -Model explicit-provider-id -Prompt 'authorized host task'
 ```
 
@@ -96,8 +96,8 @@ Codex `read-only` and `workspace-write` runs use the selected sandbox with `appr
 
 ## `--profile` silently ignored on non-Codex runner backends **[all]**
 
-**Symptom.** `dairy … --backend claude --profile deep` runs on the CLI's default
-model while the status JSON reports `"profile":"deep"`.
+**Symptom.** `dairy … --backend claude --profile sol` runs on the CLI's default
+model while the status JSON reports `"profile":"sol"`.
 
 **Cause.** `config/models.env` maps profiles to Codex model IDs only, so the
 runner resolved a model from the profile for the `codex` backend alone.

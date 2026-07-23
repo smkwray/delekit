@@ -80,9 +80,33 @@ function Read-ModelsConfig {
     return $values
 }
 
+function Test-AutoCompactCap {
+    # A persisted /autocompact value in settings.json caps every session,
+    # including a [1m] parent: the model keeps its 1M window but compaction
+    # fires at the cap. claudex only sanitizes environment variables, so the
+    # settings file is the remaining silent cap.
+    param([Parameter(Mandatory)][string]$SettingsPath, [Parameter(Mandatory)][string]$Label)
+    if (-not (Test-Path -LiteralPath $SettingsPath)) { return }
+    try {
+        $cap = (Get-Content -LiteralPath $SettingsPath -Raw | ConvertFrom-Json).autoCompactWindow
+    } catch { return }
+    if ($null -eq $cap) { return }
+    if ($env:DELEGATE_PARENT_MODEL -like '*`[1m`]*' -and [int]$cap -lt 1000000) {
+        Write-Host "BAD  autocompact cap`t$Label autoCompactWindow=$cap caps the [1m] parent; run /autocompact auto or remove the key from $SettingsPath"
+        $script:Failed = $true
+    } else {
+        Write-Host "OK   autocompact cap`t$Label autoCompactWindow=$cap (deliberate?)"
+    }
+}
+
 if (Test-Path -LiteralPath $DeviceEnv) {
     Write-Host "OK   device env`t$DeviceEnv"
     $null = Import-SimpleEnvFile -Path $DeviceEnv
+    if ($env:DELEKIT_TANDY_CONTEXT_MODE -eq 'clientdata-272k') {
+        Test-AutoCompactCap -SettingsPath (Join-Path $env:LOCALAPPDATA 'delekit\claude-profile\settings.json') -Label '272k profile'
+    } else {
+        Test-AutoCompactCap -SettingsPath (Join-Path $ClaudeHome 'settings.json') -Label 'user'
+    }
     if ($env:DELEKIT_TANDY_CONTEXT_MODE -eq 'clientdata-272k') {
         $profile = Join-Path $env:LOCALAPPDATA 'delekit\claude-profile'
         if (-not $env:ANTHROPIC_AUTH_TOKEN) {
@@ -123,10 +147,15 @@ if (Test-Path -LiteralPath $DeviceEnv) {
             Write-Host "OK   proxy models`t$uri"
             $json = $response | ConvertTo-Json -Depth 20
             $models = Read-ModelsConfig
-            foreach ($role in @('DEFAULT', 'FAST', 'DEEP')) {
+            foreach ($role in @('TERRA', 'LUNA', 'SOL')) {
                 $alias = [string]$models["DELEGATE_ALIAS_$role"]
                 if ($alias -and $json.Contains($alias)) { Write-Host "OK   $($role.ToLower()) alias`t$alias" }
-                else { Write-Warning "$($role.ToLower()) alias not found in gateway model list: $alias" }
+                else {
+                    # The live catalog drifts when config/models.env is rerendered but
+                    # the fragment is never re-merged into the deployed config.yaml.
+                    Write-Host "MISS $($role.ToLower()) alias`tnot served: $alias (re-merge generated\cliproxy\oauth-model-alias.yaml into the deployed config.yaml)"
+                    $Failed = $true
+                }
             }
         } catch {
             Write-Warning 'Proxy model endpoint is not reachable with the current local credential.'

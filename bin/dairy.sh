@@ -41,8 +41,8 @@ Prompt input (choose one):
 
 Core options:
   --backend NAME           codex (default), claude, or gemini
-  --profile NAME           default, fast, or deep; codex backend only, since
-                           config/models.env maps profiles to Codex model IDs
+  --profile NAME           terra (default), luna, or sol; codex backend only,
+                           since config/models.env maps profiles to Codex model IDs
   --model ID               explicit per-run override; REQUIRED for --backend
                            claude/gemini, which have no profile mapping
   --effort LEVEL           explicit reasoning effort override
@@ -94,7 +94,7 @@ esac
 shift
 
 BACKEND="${DELEGATE_BACKEND:-${RUNNER_DEFAULT_BACKEND:-codex}}"
-PROFILE="${DELEGATE_PROFILE:-default}"
+PROFILE="${DELEGATE_PROFILE:-terra}"
 PROFILE_EXPLICIT=0
 MODEL=""
 EFFORT=""
@@ -137,7 +137,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$BACKEND" in codex|claude|gemini) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
-case "$PROFILE" in default|fast|deep) ;; *) echo "Profile must be default, fast, or deep" >&2; exit 2 ;; esac
+case "$PROFILE" in terra|luna|sol) ;; *) echo "Profile must be terra, luna, or sol" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
 

@@ -1,4 +1,4 @@
 profile	alias	provider-model
-default	claude-sonnet-4-6-tandy-terra	gpt-5.6-terra
-fast	claude-sonnet-4-6-tandy-luna	gpt-5.6-luna
-deep	claude-sonnet-4-6-tandy-sol	gpt-5.6-sol
+terra	claude-sonnet-4-6-tandy-terra	gpt-5.6-terra
+luna	claude-sonnet-4-6-tandy-luna	gpt-5.6-luna
+sol	claude-sonnet-4-6-tandy-sol	gpt-5.6-sol

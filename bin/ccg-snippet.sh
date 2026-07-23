@@ -2,6 +2,8 @@
 # Defines ccg: the same Claude Code launch as your normal alias, but routed
 # through the local CLIProxyAPI gateway so one session can mix model families
 # (Claude parent + tandy-* subagents on the GPT profiles).
+# When global-agent-defaults/bin/agent-shell.sh is also sourced, ccgs is the
+# explicit persistent-screen variant. Plain ccg remains nonpersistent.
 #
 # Leave your existing alias untouched: it stays the direct-to-Anthropic fallback,
 # and keeps claude.ai connectors working.
@@ -36,4 +38,16 @@ ccg() (
     echo "ccg: delekit device.env not found; launching without the gateway." >&2
   fi
   exec claude --dangerously-skip-permissions "$@"
+)
+
+_ccg_launch() (
+  ccg "$@"
+)
+
+ccgs() (
+  if ! command -v _agent_screen >/dev/null 2>&1; then
+    echo "ccgs: source global-agent-defaults/bin/agent-shell.sh first." >&2
+    return 1
+  fi
+  _agent_screen _ccg_launch ccg "$@"
 )

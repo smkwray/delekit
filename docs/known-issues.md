@@ -71,6 +71,57 @@ model.
 
 ---
 
+## A `[1m]` parent that compacts at 650k (or any sub-1M number) **[all]**
+
+**Symptom.** `/model fable[1m]` (or any `[1m]` ID) is accepted, `/context`
+still reports the 1M window, but the auto-compact line shows a smaller number —
+e.g. "Auto-compact window: 650k tokens" — and the session compacts there.
+Meanwhile another launcher appears to get the full window, which makes it look
+like a launcher or gateway difference. It is neither.
+
+**Cause.** The `/autocompact <tokens>` command persists `autoCompactWindow`
+into the **global user settings file** (`~/.claude/settings.json`,
+`%USERPROFILE%\.claude\settings.json`), exactly like `/model` does (see the
+first entry above). That value caps the compact window of **every** later
+session on any model, including `[1m]` parents. The model's context window is
+untouched — only compaction fires early, so the meter looks right until you
+notice the auto-compact line. `claudex` deliberately unsets the equivalent
+environment variable (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`) but cannot drop a
+settings-file key; this is the remaining silent cap. Hit and fixed 2026-07-23:
+a forgotten `/autocompact 650000` capped `claude-fable-5[1m]` at 650k.
+
+**Fix.** Run `/autocompact auto`, or delete the `autoCompactWindow` key from
+the settings file. In the isolated 272k profile the same key lives in
+`delekit/claude-profile/settings.json` instead. The doctor scripts flag a
+sub-1M cap whenever `DELEGATE_PARENT_MODEL` carries `[1m]`.
+
+---
+
+## The deployed proxy config silently drifts from the rendered template **[all]**
+
+**Symptom.** After an alias change in `config/models.env` plus a rerender, a
+`tandy-*` spawn dies with *"502 unknown provider for model
+claude-sonnet-4-6-tandy-…"* while the parent keeps working, and `/v1/models`
+still lists the **old** alias names.
+
+**Cause.** `tools/render_config.py` rewrites `generated/` inside the synced
+kit, but the proxy reads a per-device `config.yaml` next to the binary — which
+the kit intentionally never touches (it carries the client key). Step 2→3 of
+the gateway setup is a manual copy; every later rerender needs the same manual
+re-merge, and nothing failed loudly until a delegate was actually spawned.
+Hit 2026-07-23: the alias rename in `d67c83d` (`claude-delegate-*` →
+`claude-sonnet-4-6-tandy-*`, adding `force-mapping`) was rendered but never
+merged into the live config, so every Tandy spawn 502'd.
+
+**Fix.** After **every** rerender that changes aliases or exclusions, merge
+`generated/cliproxy/oauth-model-alias.yaml` (and the exclusion block from
+`generated/cliproxy/config.template.yaml`) into the deployed `config.yaml`.
+CLIProxyAPI hot-reloads it; no restart needed. Then verify `/v1/models` serves
+the aliases `config/models.env` names. The doctor scripts now fail (not warn)
+when a configured alias is missing from the live catalog.
+
+---
+
 ## Tandy reaches the provider limit without compacting **[all]**
 
 **Symptom.** A long `tandy-*` run ends with *"Your input exceeds the context
@@ -142,9 +193,9 @@ claude-haiku-4-5-…"* in a gateway session, while the parent keeps working.
 `/model` picker short, but the exclusion also removes it from routing. Some
 built-in agents and small/fast-model fallbacks request Haiku implicitly.
 
-**Fix.** Accepted trade-off; Haiku is not needed on these devices. If a
-workflow genuinely requires it, remove `*haiku*` from `CLIPROXY_EXCLUDE_CLAUDE`
-in `config/models.env`, rerender, and restart the proxy.
+**Fix.** The default profile omits Haiku. If a workflow requires it, remove
+`*haiku*` from `CLIPROXY_EXCLUDE_CLAUDE` in `config/models.env`, rerender, and
+restart the proxy.
 
 ---
 
@@ -214,6 +265,12 @@ machine. `-no-browser` prints the URL instead of opening one; open it yourself
 (`open "<url>"` on macOS, `Start-Process "<url>"` on Windows) when driving the
 install from a non-interactive shell. Use `-codex-device-login` where no browser
 exists at all.
+
+Run the login itself in a visible, interactive terminal. Some releases ask for
+the final callback URL on stdin. A still-running login process with no new JSON
+in the auth directory is waiting, not authenticated. Codex authentication alone
+exposes the delegate aliases; without a Claude credential, the parent fails with
+`502 unknown provider`.
 
 ---
 

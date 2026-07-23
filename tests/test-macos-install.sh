@@ -79,4 +79,14 @@ assert state['clientDataCache']['kelp_forest_sonnet'] == '272000'
 assert state['clientDataCache']['rowan_thicket']['claude-sonnet-4-6'] == 272000
 assert state['autoCompactWindowsCache']['claude-sonnet-4-6'] == 272000
 PY
+
+# The synced ccg snippet keeps plain ccg direct and delegates only ccgs to the
+# optional persistent-session helper from global-agent-defaults.
+_agent_screen() {
+  printf '%s\n' "$*" > "$TMP/ccgs-launch.txt"
+}
+. "$ROOT/bin/ccg-snippet.sh"
+ccgs --model opus
+assert_grep "_ccg_launch ccg --model opus" "$TMP/ccgs-launch.txt"
+
 printf 'mac installer and launcher smoke tests passed\n'

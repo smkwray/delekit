@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS = ROOT / 'generated' / 'claude' / 'agents'
 SKILL = ROOT / 'generated' / 'claude' / 'skills' / 'orchestrate-delegates' / 'SKILL.md'
-ROLES = ('DEFAULT', 'FAST', 'DEEP')
+ROLES = ('TERRA', 'LUNA', 'SOL')
 
 
 def read_env() -> dict[str, str]:
@@ -27,7 +27,7 @@ def agent_names(env: dict[str, str]) -> dict[str, str]:
     prefix = env['AGENT_PREFIX']
     expected: dict[str, str] = {}
     for role in ROLES:
-        profile = env[f'DELEGATE_NAME_{role}']
+        profile = role.lower()
         alias = env[f'DELEGATE_ALIAS_{role}']
         for suffix in ('', '-worktree', '-readonly'):
             expected[f'{prefix}-{profile}{suffix}'] = alias
@@ -95,7 +95,7 @@ class RenderConfigTest(unittest.TestCase):
     def test_agent_capability_boundaries(self) -> None:
         prefix = self.env['AGENT_PREFIX']
         for role in ROLES:
-            profile = self.env[f'DELEGATE_NAME_{role}']
+            profile = role.lower()
 
             for name in (f'{prefix}-{profile}', f'{prefix}-{profile}-worktree'):
                 text = (AGENTS / f'{name}.md').read_text(encoding='utf-8')
@@ -122,7 +122,7 @@ class RenderConfigTest(unittest.TestCase):
         skill = SKILL.read_text(encoding='utf-8')
         prefix = self.env['AGENT_PREFIX']
         for role in ROLES:
-            self.assertIn(self.env[f'DELEGATE_NAME_{role}'], skill)
+            self.assertIn(role.lower(), skill)
         self.assertIn(f'{prefix}-<profile>', skill)
         # Model aliases legitimately start with `claude-`; agent names must not.
         aliases = {self.env[f'DELEGATE_ALIAS_{r}'] for r in ROLES}

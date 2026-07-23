@@ -7,14 +7,14 @@ Pick a delegate by **model profile** and **capability**. The Agent tool's `model
 parameter only accepts built-in names, so a gateway alias cannot be passed at
 spawn time; the profile comes from the agent you name.
 
-Profiles: `{{DELEGATE_NAME_DEFAULT}}` (default), `{{DELEGATE_NAME_FAST}}` (fast, high-volume),
-`{{DELEGATE_NAME_DEEP}}` (strongest). Every profile has all three capabilities:
+Profiles: `terra` (default), `luna` (fast, high-volume),
+`sol` (strongest). Every profile has all three capabilities:
 
 - `{{AGENT_PREFIX}}-<profile>` — writer in the current checkout
 - `{{AGENT_PREFIX}}-<profile>-worktree` — writer isolated in its own Git worktree
 - `{{AGENT_PREFIX}}-<profile>-readonly` — investigation with file tools and read-only shell
 
-So `{{AGENT_PREFIX}}-{{DELEGATE_NAME_FAST}}-readonly` and `{{AGENT_PREFIX}}-{{DELEGATE_NAME_DEEP}}-worktree` are both valid.
+So `{{AGENT_PREFIX}}-luna-readonly` and `{{AGENT_PREFIX}}-sol-worktree` are both valid.
 
 Spawn with **`subagent_type: {{AGENT_PREFIX}}-<profile>[-capability]`**. That
 parameter name is load-bearing: the Agent tool ignores unrecognised parameters
@@ -23,7 +23,7 @@ generic subagent on the session's own model, in the main checkout, with no
 worktree. Nothing in the transcript says so.
 
 Verify rather than assume. A delegate asked to state its model answers with its
-gateway alias (`{{DELEGATE_ALIAS_DEFAULT}}` and friends); a silent fallback
+gateway alias (`{{DELEGATE_ALIAS_TERRA}}` and friends); a silent fallback
 answers with the session model instead. If a delegate's first report does not
 look like it ran where you sent it, check before trusting the work.
 

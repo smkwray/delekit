@@ -42,6 +42,13 @@ This regenerates the agent files and writes
 already contains the alias mapping and the catalog trimming; never hand-edit
 `generated/` — change `config/models.env` and rerender.
 
+Rendering only updates the synced kit. The proxy reads the per-device
+`config.yaml` from step 3, so **every rerender that changes aliases or
+exclusions must be followed by re-merging the fragment into that deployed
+file** (it hot-reloads). Skipping the merge leaves the live catalog serving
+the old aliases and every `tandy-*` spawn fails with `502 unknown provider`
+— see [known-issues.md](known-issues.md).
+
 ## 3. Create the device config
 
 Copy `generated/cliproxy/config.template.yaml` next to the binary as
@@ -53,6 +60,8 @@ Copy `generated/cliproxy/config.template.yaml` next to the binary as
   `python -c "import secrets;print('sk-local-'+secrets.token_hex(24))"`
 
 Save that key: it is the token Claude Code presents to the proxy.
+On Windows, use forward slashes in a double-quoted YAML path
+(`C:/Users/<you>/.cli-proxy-api`). Backslashes introduce YAML escape sequences.
 
 ## 4. Authenticate the upstreams
 
@@ -63,9 +72,18 @@ cli-proxy-api -config config.yaml -codex-login  -no-browser   # GPT models
 cli-proxy-api -config config.yaml -claude-login -no-browser   # Opus/Sonnet/Fable
 ```
 
+Run both commands in a visible, interactive terminal. A login may ask you to
+paste the final localhost redirect into that terminal even when the browser
+opened normally. Let the Codex command finish before starting the Claude
+command.
+
 `-no-browser` prints an authorization URL instead of opening one. Visit it,
 approve, and the local callback completes the login. Each writes a credential
 JSON into `<AUTH_DIR>`; the running proxy watches that directory and hot-reloads.
+
+Do not launch `ccg` until `<AUTH_DIR>` contains both a Codex credential and a
+Claude credential. Codex authentication alone exposes the three delegate
+aliases, but the Claude parent still fails with `502 unknown provider`.
 
 The callback ports are fixed and must be free on the machine running the
 browser: **1455** for Codex, **54545** for Claude. On macOS the credential JSONs
@@ -176,5 +194,8 @@ from the top of this document, not a misconfiguration.
   running; stop it before starting another.
 - **A model you expect is missing** — check `CLIPROXY_EXCLUDE_*` in
   `config/models.env`, then rerender and restart.
+- **`502 unknown provider` for the parent after delegate aliases appear** — the
+  Codex login completed but the Claude login did not. Confirm that `<AUTH_DIR>`
+  contains credentials for both providers, then start a new `ccg` session.
 - **Subagent model not found** — the session was not launched through `ccg`, so
   it never reached the gateway.

@@ -112,6 +112,7 @@ if [[ "$GATEWAY_CLAUDE_HOME" != "$CLAUDE_HOME" ]]; then
 fi
 wire_file "$KIT_ROOT/bin/claudex.sh" "$BIN_DIR/claudex"
 wire_file "$KIT_ROOT/bin/dairy.sh" "$BIN_DIR/dairy"
+wire_file "$KIT_ROOT/bin/herd.sh" "$BIN_DIR/herd"
 wire_file "$KIT_ROOT/bin/prune-worktrees.sh" "$BIN_DIR/prune-worktrees"
 
 DEVICE_ENV="$DEVICE_DIR/device.env"

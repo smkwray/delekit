@@ -7,8 +7,8 @@ param(
     [ValidateSet('codex', 'claude', 'gemini')]
     [string]$Backend,
 
-    [ValidateSet('default', 'fast', 'deep')]
-    [string]$Profile = 'default',
+    [ValidateSet('terra', 'luna', 'sol')]
+    [string]$Profile = 'terra',
 
     [string]$Model,
     [string]$Effort,

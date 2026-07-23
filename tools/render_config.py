@@ -15,16 +15,17 @@ GENERATED_AGENT_DIR = ROOT / "generated" / "claude" / "agents"
 GENERATED_SKILL_DIR = ROOT / "generated" / "claude" / "skills"
 GENERATED_PROXY_DIR = ROOT / "generated" / "cliproxy"
 
+# Profile == env-suffix (lower-cased) == tandy agent name, so ROLES is the whole
+# vocabulary; the profile no longer needs its own DELEGATE_NAME_* mapping.
+ROLES = ("TERRA", "LUNA", "SOL")
+
 REQUIRED = [
-    "DELEGATE_ALIAS_DEFAULT",
-    "DELEGATE_ALIAS_FAST",
-    "DELEGATE_ALIAS_DEEP",
-    "DELEGATE_MODEL_DEFAULT",
-    "DELEGATE_MODEL_FAST",
-    "DELEGATE_MODEL_DEEP",
-    "DELEGATE_NAME_DEFAULT",
-    "DELEGATE_NAME_FAST",
-    "DELEGATE_NAME_DEEP",
+    "DELEGATE_ALIAS_TERRA",
+    "DELEGATE_ALIAS_LUNA",
+    "DELEGATE_ALIAS_SOL",
+    "DELEGATE_MODEL_TERRA",
+    "DELEGATE_MODEL_LUNA",
+    "DELEGATE_MODEL_SOL",
     "AGENT_PREFIX",
 ]
 
@@ -48,7 +49,7 @@ def parse_env(path: Path) -> dict[str, str]:
     missing = [key for key in REQUIRED if not values.get(key)]
     if missing:
         raise ValueError(f"Missing required keys: {', '.join(missing)}")
-    aliases = [values[f"DELEGATE_ALIAS_{role}"] for role in ("DEFAULT", "FAST", "DEEP")]
+    aliases = [values[f"DELEGATE_ALIAS_{role}"] for role in ROLES]
     if len(set(aliases)) != len(aliases):
         raise ValueError("Delegate aliases must be unique")
     return values
@@ -78,8 +79,8 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
     # templates so a wording change does not have to be repeated per profile.
     capabilities = (("write", ""), ("worktree", "-worktree"), ("readonly", "-readonly"))
     prefix = values["AGENT_PREFIX"]
-    for role in ("DEFAULT", "FAST", "DEEP"):
-        profile = values[f"DELEGATE_NAME_{role}"]
+    for role in ROLES:
+        profile = role.lower()
         alias = values[f"DELEGATE_ALIAS_{role}"]
         for stem, suffix in capabilities:
             template = TEMPLATE_DIR / f"{stem}.md.tmpl"
@@ -96,7 +97,7 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
         destination = GENERATED_SKILL_DIR / relative.with_name(relative.name.removesuffix(".tmpl"))
         outputs[destination] = render_template(template.read_text(encoding="utf-8"), values)
 
-    roles = ("DEFAULT", "FAST", "DEEP")
+    roles = ROLES
     oauth_lines = [
         "# Generated from config/models.env. Merge under the top-level config.",
         "# Applies to Codex OAuth/login credentials.",

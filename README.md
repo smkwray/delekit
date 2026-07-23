@@ -8,9 +8,13 @@ Delegate coding work from Claude Code or the terminal, on macOS and Windows:
   Interactive.
 - **`dairy`** — a standalone CLI for one-shot, unattended, and CI jobs with
   Codex or Claude. No gateway required.
+- **`herd`** — detached, resumable, steerable headless workers with Codex or
+  Claude: spawn returns immediately, and you check on, steer, resume, or kill
+  the worker later. No gateway, no Claude session. State is device-local and
+  never synced.
 
-Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees both paths
-create.
+Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees these
+paths create.
 
 ```text
 runtime-selected orchestrator (Opus, Sonnet, Fable — your choice)
@@ -28,8 +32,8 @@ boundaries, not personas — the task message defines the work. Multiple workers
 run under distinct runtime names, and the orchestrator can message or resume any
 of them by agent ID.
 
-`tandy` needs the gateway; `dairy` and `prune-worktrees` do not. If you only want
-direct CLI execution, install the kit and skip the gateway steps.
+`tandy` needs the gateway; `dairy`, `herd`, and `prune-worktrees` do not. If you
+only want direct CLI execution, install the kit and skip the gateway steps.
 
 ## Why a gateway is required
 
@@ -56,7 +60,9 @@ replacing your existing one.
 
 3. **Add the `ccg` launcher** from `bin/ccg-snippet.sh` or `bin/ccg-snippet.ps1`
    *alongside* your normal one, then run `./bin/doctor-macos.sh` (or
-   `doctor-windows.ps1`) to verify.
+   `doctor-windows.ps1`) to verify. On macOS/Linux, sourcing the sibling
+   `global-agent-defaults/bin/agent-shell.sh` first also enables `ccgs`, an
+   explicitly persistent `screen` variant; plain `ccg` stays nonpersistent.
 
 Change models by editing `config/models.env` and re-rendering — never by editing
 `generated/`.
@@ -70,6 +76,7 @@ Change models by editing `config/models.env` and re-rendering — never by editi
 | [docs/architecture.md](docs/architecture.md) | Design, prompt budget, why it stays maintainable |
 | [docs/native-agents.md](docs/native-agents.md) | Delegating, resuming, smoke tests |
 | [docs/dairy-runner.md](docs/dairy-runner.md) | The `dairy` CLI: modes, backends, known issues |
+| [docs/detached-runner.md](docs/detached-runner.md) | The `herd` CLI: detached, resumable workers and their lifecycle |
 | [docs/model-aliases.md](docs/model-aliases.md) | How aliases map to providers |
 | [docs/permissions-and-stalls.md](docs/permissions-and-stalls.md) | Permission modes and avoiding hangs |
 | [DEVICE-AGENT-INSTALL.md](DEVICE-AGENT-INSTALL.md) | A brief you can hand to a local coding agent to install this for you |

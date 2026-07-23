@@ -2,13 +2,14 @@
 
 ## Stable contract
 
-The kit exposes three client-facing profiles:
+The kit exposes three client-facing profiles, named for their models rather than
+for a speed or mode:
 
 | Profile | Config key | Intended use |
 |---|---|---|
-| default | `DELEGATE_ALIAS_DEFAULT` | normal implementation and analysis |
-| fast | `DELEGATE_ALIAS_FAST` | mechanical or high-volume work |
-| deep | `DELEGATE_ALIAS_DEEP` | difficult architecture, debugging, or challenge |
+| terra | `DELEGATE_ALIAS_TERRA` | normal implementation and analysis (default) |
+| luna | `DELEGATE_ALIAS_LUNA` | mechanical or high-volume work |
+| sol | `DELEGATE_ALIAS_SOL` | difficult architecture, debugging, or challenge |
 
 Actual provider model IDs live only in the corresponding `DELEGATE_MODEL_*` lines. Generated files may repeat them as outputs, but no source template or launcher pins them.
 

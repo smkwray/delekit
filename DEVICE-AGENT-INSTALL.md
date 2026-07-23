@@ -29,9 +29,11 @@ INSTALL
    checksums, into a LOCAL directory. The binary, its config.yaml, and its auth
    directory must never live inside the repo. Fill <AUTH_DIR> and
    <CLIENT_KEY> in a copy of generated/cliproxy/config.template.yaml.
-6. Run both OAuth logins (-codex-login and -claude-login). They block on
-   localhost callbacks and need a browser on this machine; surface the URLs if
-   you cannot open them. Afterwards restrict the credential files to owner-only.
+6. Run both OAuth logins (-codex-login and -claude-login) in a visible,
+   interactive terminal. They block on localhost callbacks, may request the
+   final callback URL on stdin, and need a browser on this machine. Confirm that
+   each command exits successfully and writes its provider credential JSON
+   before launching ccg. Afterwards restrict the credential files to owner-only.
 7. Start the proxy at login: bin/install-launchd-macos.sh on Mac, a hidden
    Startup-folder launcher on Windows. Verify it survives a restart of the
    process, not just a manual start.

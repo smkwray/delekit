@@ -60,9 +60,36 @@ for path in "$CLAUDE_HOME/agents/delekit" "$CLAUDE_HOME/skills/orchestrate-deleg
   if [[ -e "$path" ]]; then echo "OK   wired             $path"; else echo "MISS wired             $path"; FAIL=1; fi
 done
 
+check_autocompact_cap() {
+  # A persisted /autocompact value in settings.json caps every session,
+  # including a [1m] parent: the model keeps its 1M window but compaction
+  # fires at the cap. claudex only sanitizes environment variables, so the
+  # settings file is the remaining silent cap. Check each profile that the
+  # current mode will actually use.
+  local settings="$1" label="$2"
+  [[ -f "$settings" && "$have_python" -eq 1 ]] || return 0
+  local cap
+  cap="$(python3 -c "
+import json,sys
+try: v=json.load(open(sys.argv[1])).get('autoCompactWindow')
+except Exception: v=None
+print(v if isinstance(v,int) else '')" "$settings")"
+  if [[ -n "$cap" && "${DELEGATE_PARENT_MODEL:-}" == *"[1m]"* && "$cap" -lt 1000000 ]]; then
+    echo "BAD  autocompact cap    $label autoCompactWindow=$cap caps the [1m] parent; run /autocompact auto or remove the key from $settings"
+    FAIL=1
+  elif [[ -n "$cap" ]]; then
+    echo "OK   autocompact cap    $label autoCompactWindow=$cap (deliberate?)"
+  fi
+}
+
 if [[ -f "$DEVICE_ENV" ]]; then
   echo "OK   device env        $DEVICE_ENV"
   load_env_file "$DEVICE_ENV"
+  if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" == "clientdata-272k" ]]; then
+    check_autocompact_cap "${XDG_CONFIG_HOME:-$HOME/.config}/delekit/claude-profile/settings.json" "272k profile"
+  else
+    check_autocompact_cap "$CLAUDE_HOME/settings.json" "user"
+  fi
   if [[ "${DELEKIT_TANDY_CONTEXT_MODE:-native-200k}" == "clientdata-272k" ]]; then
     profile="${XDG_CONFIG_HOME:-$HOME/.config}/delekit/claude-profile"
     if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
@@ -102,13 +129,16 @@ PY
       base_url="${ANTHROPIC_BASE_URL%/}"
       if curl -fsS --max-time 5 "${auth_args[@]}" "$base_url/v1/models" > "$models_json" 2>/dev/null; then
         echo "OK   proxy models      $base_url/v1/models"
-        for role in DEFAULT FAST DEEP; do
+        for role in TERRA LUNA SOL; do
           alias_name="$(config_value "DELEGATE_ALIAS_$role")"
           role_lower="$(printf '%s' "$role" | tr '[:upper:]' '[:lower:]')"
           if [[ -n "$alias_name" && $(grep -Fc "$alias_name" "$models_json") -gt 0 ]]; then
             printf 'OK   %-18s %s\n' "$role_lower alias" "$alias_name"
           else
-            printf 'WARN %-18s %s\n' "$role_lower alias" "not found: $alias_name"
+            # The live catalog drifts when config/models.env is rerendered but the
+            # fragment is never re-merged into the deployed config.yaml.
+            printf 'MISS %-18s %s\n' "$role_lower alias" "not served: $alias_name (re-merge generated/cliproxy/oauth-model-alias.yaml into the deployed config.yaml)"
+            FAIL=1
           fi
         done
       else
