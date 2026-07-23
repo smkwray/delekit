@@ -1,6 +1,6 @@
 ---
 name: orchestrate-delegates
-description: Coordinate one or more arbitrary delegate agents, including parallel worktrees, model profiles, course corrections, and integration.
+description: Coordinate delegate agents and the dairy/herd headless runner CLIs — model profiles, parallel worktrees, detached and steerable workers, computer-use access modes, course corrections, and integration. Load before any dairy or herd invocation.
 ---
 
 Pick a delegate by **model profile** and **capability**. The Agent tool's `model`
