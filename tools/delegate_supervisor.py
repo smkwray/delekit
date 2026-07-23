@@ -259,12 +259,18 @@ class CodexBackend(Backend):
         return argv, meta["prompt"], exec_root
 
     def resume_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        # `codex exec resume` (>=0.145) accepts only a narrow flag set: no
+        # --sandbox/--cd/--color. Sandbox and approvals go through -c overrides;
+        # cwd comes from the Popen cwd. Verified against codex-cli 0.145.0.
         exec_root = meta["exec_root"]
-        argv = [self.locate_bin(), "exec", "resume", meta["session_id"], "--json",
+        argv = [self.locate_bin(), "exec", "resume", "--json",
                 "--model", meta["model"], "-c", f"model_reasoning_effort={meta['effort']}",
-                "--skip-git-repo-check", "--color", "never"]
-        argv += self.sandbox_args(meta["access"])
-        argv.append("-")
+                "--skip-git-repo-check"]
+        if meta["access"] == "danger-full-access":
+            argv.append("--dangerously-bypass-approvals-and-sandbox")
+        else:
+            argv += ["-c", f"sandbox_mode={meta['access']}", "-c", "approval_policy=never"]
+        argv += [meta["session_id"], "-"]
         return argv, meta["prompt"], exec_root
 
     def parse(self, obj: dict[str, Any]) -> dict[str, str]:
@@ -275,6 +281,16 @@ class CodexBackend(Backend):
         sess = obj.get("session")
         if isinstance(sess, dict) and isinstance(sess.get("id"), str):
             out["session_id"] = sess["id"]
+        # codex-cli >= 0.14x: {"type":"item.completed","item":{"type":"agent_message","text":...}}
+        item = obj.get("item")
+        if obj.get("type") in ("item.completed", "item.updated") and isinstance(item, dict):
+            itype = item.get("item_type") or item.get("type")
+            if itype == "agent_message" and isinstance(item.get("text"), str):
+                out["message"] = item["text"]
+            elif itype == "reasoning" and isinstance(item.get("text"), str):
+                out["thinking"] = item["text"]
+            return out
+        # older event shapes: {"msg":{"type":"agent_message","message":...}} and friends
         msg = obj.get("msg") if isinstance(obj.get("msg"), dict) else obj
         mtype = msg.get("type")
         if mtype in ("agent_message", "assistant_message") and isinstance(msg.get("message"), str):
