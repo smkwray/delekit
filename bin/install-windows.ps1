@@ -2,6 +2,7 @@
 param(
     [switch]$Copy,
     [switch]$AddToUserPath,
+    [switch]$AlsoDefaultProfile,
     [string]$BinDir = (Join-Path $HOME 'bin')
 )
 
@@ -99,10 +100,31 @@ function Install-CommandWrapper {
     Write-Host "Installed: $Path"
 }
 
-Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $ClaudeHome 'agents\delekit')
+# Reinstalling on a device set up under the old dual-install convention: clear a
+# stale, managed default-profile agents junction so the scope self-heals to
+# gateway-only. Only ever removes our own managed link, never user content.
+if (-not $AlsoDefaultProfile -and -not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
+    $stale = Join-Path $ClaudeHome 'agents\delekit'
+    $staleItem = Get-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
+    if ($staleItem -and $staleItem.LinkType -in @('Junction','SymbolicLink') -and
+        (Test-SamePath -Left @($staleItem.Target)[0] -Right (Join-Path $KitRoot 'generated\claude\agents'))) {
+        $staleItem.Delete()
+        Write-Host "Cleared stale default-profile agent link: $stale"
+    }
+}
+
+# Delegate agents install into the gateway profile only, so a plain Claude Code
+# session (default profile) stays clean. CCG points CLAUDE_CONFIG_DIR at the
+# gateway profile, so it still sees them. -AlsoDefaultProfile restores the legacy
+# dual install; when the default profile IS the gateway, this one link covers it.
+Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $GatewayClaudeHome 'agents\delekit')
+if ($AlsoDefaultProfile -and -not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
+    Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $ClaudeHome 'agents\delekit')
+}
+# The orchestration Skill stays in the default profile; the gateway shares the
+# default skills collection below, so the skill reaches the gateway that way.
 Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\skills\orchestrate-delegates') -Target (Join-Path $ClaudeHome 'skills\orchestrate-delegates')
 if (-not (Test-SamePath -Left $GatewayClaudeHome -Right $ClaudeHome)) {
-    Install-DirectoryLink -Source (Join-Path $KitRoot 'generated\claude\agents') -Target (Join-Path $GatewayClaudeHome 'agents\delekit')
     $normalSkills = Join-Path $ClaudeHome 'skills'
     $gatewaySkills = Join-Path $GatewayClaudeHome 'skills'
     if (-not $Copy -and (Test-Path -LiteralPath $gatewaySkills)) {

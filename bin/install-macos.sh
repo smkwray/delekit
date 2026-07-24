@@ -8,20 +8,26 @@ BIN_DIR="${HOME}/.local/bin"
 DEVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/delekit"
 GATEWAY_CLAUDE_HOME="$DEVICE_DIR/claude-profile"
 COPY_MODE=0
+ALSO_DEFAULT=0
 
 usage() {
   cat <<EOF
-Usage: install-macos.sh [--copy] [--bin-dir PATH]
+Usage: install-macos.sh [--copy] [--also-default-profile] [--bin-dir PATH]
 
 Default: create symlinks from Claude Code's user directories to this synced kit.
---copy       copy generated files instead (updates then require reinstalling)
---bin-dir    command directory (default: ~/.local/bin)
+Delegate agents install into the gateway profile only, so a plain \`claude\`
+session (the default profile) stays clean; CCG points CLAUDE_CONFIG_DIR at the
+gateway profile and still sees them.
+--copy                   copy generated files instead (updates then require reinstalling)
+--also-default-profile   also install the delegate agents into the default profile (legacy)
+--bin-dir                command directory (default: ~/.local/bin)
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --copy) COPY_MODE=1; shift ;;
+    --also-default-profile) ALSO_DEFAULT=1; shift ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -104,11 +110,35 @@ wire_file() {
   echo "Installed: $target"
 }
 
-wire_dir "$KIT_ROOT/generated/claude/agents" "$CLAUDE_HOME/agents/delekit"
+# The orchestration Skill stays in the default profile (and the gateway); it is
+# inert guidance without the agents, and keeping it matches Windows, where the
+# gateway shares the default skills collection.
 wire_dir "$KIT_ROOT/generated/claude/skills/orchestrate-delegates" "$CLAUDE_HOME/skills/orchestrate-delegates"
 if [[ "$GATEWAY_CLAUDE_HOME" != "$CLAUDE_HOME" ]]; then
-  wire_dir "$KIT_ROOT/generated/claude/agents" "$GATEWAY_CLAUDE_HOME/agents/delekit"
   wire_dir "$KIT_ROOT/generated/claude/skills/orchestrate-delegates" "$GATEWAY_CLAUDE_HOME/skills/orchestrate-delegates"
+fi
+
+# Reinstalling on a device set up under the old dual-install convention: clear a
+# stale, managed default-profile agents link/copy so the scope self-heals to
+# gateway-only. Only ever removes our own managed artifact, never user content.
+if [[ "$ALSO_DEFAULT" -eq 0 && "$GATEWAY_CLAUDE_HOME" != "$CLAUDE_HOME" ]]; then
+  stale="$CLAUDE_HOME/agents/delekit"
+  if [[ -L "$stale" && "$(readlink "$stale")" == "$KIT_ROOT/generated/claude/agents" ]]; then
+    rm "$stale"; echo "Cleared stale default-profile agent link: $stale"
+  elif [[ -d "$stale" && -f "$stale/.delekit-copy-source" \
+          && "$(cat "$stale/.delekit-copy-source")" == "$KIT_ROOT/generated/claude/agents" ]]; then
+    rm -rf "$stale"; echo "Cleared stale default-profile agent copy: $stale"
+  fi
+fi
+
+# Delegate agents install into the gateway profile only, so a plain `claude`
+# session (default profile) does not carry them. CCG sets CLAUDE_CONFIG_DIR to
+# the gateway profile, so it still sees them. --also-default-profile restores the
+# legacy dual install. (When the default profile IS the gateway, this one link
+# covers both.)
+wire_dir "$KIT_ROOT/generated/claude/agents" "$GATEWAY_CLAUDE_HOME/agents/delekit"
+if [[ "$ALSO_DEFAULT" -eq 1 && "$GATEWAY_CLAUDE_HOME" != "$CLAUDE_HOME" ]]; then
+  wire_dir "$KIT_ROOT/generated/claude/agents" "$CLAUDE_HOME/agents/delekit"
 fi
 wire_file "$KIT_ROOT/bin/claudex.sh" "$BIN_DIR/claudex"
 wire_file "$KIT_ROOT/bin/dairy.sh" "$BIN_DIR/dairy"
@@ -141,7 +171,9 @@ Next:
 2. Merge the appropriate generated/cliproxy YAML fragment into CLIProxyAPI.
 3. Restart CLIProxyAPI.
 4. Ensure $BIN_DIR is on PATH, then run: claudex
-5. Start a new Claude Code session if ~/.claude/agents did not exist before this run.
+5. Start a new Claude Code session if the gateway profile did not exist before
+   this run. The delegate agents live in the gateway profile only; pass
+   --also-default-profile to also expose them to a plain \`claude\` session.
 
 Optional project setting: merge config/claude-settings.fragment.json to base
 native worktrees on your current committed HEAD.

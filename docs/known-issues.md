@@ -332,10 +332,14 @@ this shape. Register it against the `Agent` matcher:
   {"type": "command", "command": "python3 /path/to/bin/hooks/verify-delegate-spawn.py"}]}]}}
 ```
 
-It runs two independent checks, because whether the harness strips unknown keys
-before hooks run is undocumented: it denies a near-miss key name if one is
-visible, **and** denies any spawn whose prompt names a delegate while
-`subagent_type` is generic. The second check holds either way.
+It runs three independent checks. The first two guard the `subject_type` typo,
+because whether the harness strips unknown keys before hooks run is undocumented:
+it denies a near-miss key name if one is visible, **and** denies any spawn whose
+prompt names a delegate while `subagent_type` is generic. The second check holds
+either way. The third denies a per-invocation `model` on a `tandy-*` spawn: the
+Agent tool's `model` slot only takes built-in names (sonnet/opus/haiku/fable) and
+outranks the agent's frontmatter alias, so a value there would silently route the
+delegate off its gateway profile.
 
 **Verifying by hand.** Ask the delegate to state its model. A real one answers
 with its gateway alias (`claude-delegate-*`); a silent fallback answers with the

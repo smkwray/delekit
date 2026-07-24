@@ -82,6 +82,19 @@ def main() -> int:
                  f"become a generic subagent on the session model with no "
                  f"worktree. Re-issue with subagent_type.")
 
+    # --- C. a per-invocation model would override the delegate's profile --
+    # Model resolution is per-invocation model > agent-file alias, and the Agent
+    # tool's model field only accepts sonnet/opus/haiku/fable — never a gateway
+    # profile alias. So a model here silently routes a delegate off its profile
+    # onto a non-gateway model, defeating the whole point of naming the agent.
+    if requested.startswith(f"{PREFIX}-") and ti.get("model"):
+        deny(f"{requested} pins its model through its agent-file alias, but this "
+             f"spawn also sets model={ti.get('model')!r}. The per-invocation "
+             f"model outranks the alias, and the Agent tool only accepts "
+             f"sonnet/opus/haiku/fable, so the delegate would run off-profile on "
+             f"a non-gateway model. Drop the model field — the profile comes "
+             f"from the agent name.")
+
     # --- B. a delegate is described but not actually requested ------------
     if requested in GENERIC:
         blob = " ".join(str(ti.get(k, "")) for k in ("description", "prompt"))

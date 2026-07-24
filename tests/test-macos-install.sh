@@ -16,15 +16,25 @@ HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" CLAUDE_CONFIG_DIR="$TMP/claude" \
 
 # Agent filenames come from config/models.env, so assert the rendered set
 # rather than one hardcoded name that a rename would silently invalidate.
-for agent in "$ROOT"/generated/claude/agents/*.md; do
-  assert_file "$TMP/claude/agents/delekit/$(basename "$agent")"
-done
-assert_file "$TMP/claude/skills/orchestrate-delegates/SKILL.md"
+# Delegate agents belong to the gateway profile only; the default profile must
+# stay clean so a plain `claude` session does not carry them.
 for agent in "$ROOT"/generated/claude/agents/*.md; do
   assert_file "$TMP/xdg/delekit/claude-profile/agents/delekit/$(basename "$agent")"
 done
 assert_file "$TMP/xdg/delekit/claude-profile/skills/orchestrate-delegates/SKILL.md"
+# The Skill stays in the default profile; the delegate agents do not.
+assert_file "$TMP/claude/skills/orchestrate-delegates/SKILL.md"
+[[ -e "$TMP/claude/agents/delekit" ]] && {
+  echo "FAIL: default profile must not carry delegate agents by default" >&2; exit 1; }
 assert_grep "exec $ROOT/bin/claudex.sh" "$TMP/bin/claudex"
+
+# --also-default-profile restores the legacy dual install into the default
+# profile (idempotent --copy, so it reuses the existing dirs).
+HOME="$TMP/home" XDG_CONFIG_HOME="$TMP/xdg" CLAUDE_CONFIG_DIR="$TMP/claude" \
+  "$ROOT/bin/install-macos.sh" --copy --also-default-profile --bin-dir "$TMP/bin" >/dev/null
+for agent in "$ROOT"/generated/claude/agents/*.md; do
+  assert_file "$TMP/claude/agents/delekit/$(basename "$agent")"
+done
 
 mkdir -p "$TMP/fake"
 cat > "$TMP/fake/claude" <<'FAKE'
