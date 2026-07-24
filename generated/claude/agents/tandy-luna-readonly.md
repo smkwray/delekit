@@ -1,6 +1,6 @@
 ---
 name: tandy-luna-readonly
-description: Read-only delegate (luna profile) for investigation and analysis; makes no changes.
+description: Read-only delegate — luna profile (fast tier; mechanical, high-volume, low-ambiguity work); investigation and analysis, makes no changes.
 model: claude-sonnet-4-6-tandy-luna
 permissionMode: plan
 tools:

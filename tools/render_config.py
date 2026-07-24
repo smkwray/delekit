@@ -26,6 +26,9 @@ REQUIRED = [
     "DELEGATE_MODEL_TERRA",
     "DELEGATE_MODEL_LUNA",
     "DELEGATE_MODEL_SOL",
+    "DELEGATE_HINT_TERRA",
+    "DELEGATE_HINT_LUNA",
+    "DELEGATE_HINT_SOL",
     "AGENT_PREFIX",
 ]
 
@@ -89,6 +92,7 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
             local["AGENT_NAME"] = agent_name
             local["AGENT_MODEL"] = alias
             local["AGENT_PROFILE"] = profile
+            local["PROFILE_HINT"] = values[f"DELEGATE_HINT_{role}"]
             destination = GENERATED_AGENT_DIR / f"{agent_name}.md"
             outputs[destination] = render_template(template.read_text(encoding="utf-8"), local)
 

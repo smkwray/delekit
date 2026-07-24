@@ -1,6 +1,6 @@
 ---
 name: tandy-sol
-description: Read-write delegate (sol profile) in the current checkout.
+description: Read-write delegate — sol profile (strongest tier; hard architecture, debugging, tricky reasoning); works in the current checkout.
 model: claude-sonnet-4-6-tandy-sol
 permissionMode: acceptEdits
 disallowedTools:

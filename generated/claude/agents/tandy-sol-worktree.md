@@ -1,6 +1,6 @@
 ---
 name: tandy-sol-worktree
-description: Read-write delegate (sol profile) isolated in its own Git worktree; use for parallel writers.
+description: Read-write delegate — sol profile (strongest tier; hard architecture, debugging, tricky reasoning); isolated in its own Git worktree for parallel writers.
 model: claude-sonnet-4-6-tandy-sol
 permissionMode: acceptEdits
 isolation: worktree

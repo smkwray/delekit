@@ -1,6 +1,6 @@
 ---
 name: tandy-luna
-description: Read-write delegate (luna profile) in the current checkout.
+description: Read-write delegate — luna profile (fast tier; mechanical, high-volume, low-ambiguity work); works in the current checkout.
 model: claude-sonnet-4-6-tandy-luna
 permissionMode: acceptEdits
 disallowedTools:
