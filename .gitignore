@@ -3,6 +3,9 @@ device.env
 *.local.yaml
 config.yaml
 
+# Local orchestration state + roadmap — private, never tracked
+do/
+
 # OS / editor
 .DS_Store
 .vscode/

@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'claude', 'gemini')]
+    [ValidateSet('codex', 'claude', 'agy')]
     [string]$Backend,
 
     [ValidateSet('terra', 'luna', 'sol')]
@@ -27,7 +27,6 @@ param(
     [switch]$NoAutoCommit,
     [switch]$NoPreamble,
     [switch]$Fast,
-    [string]$FallbackModel,
     [switch]$Json,
     [switch]$DryRun
 )
@@ -88,8 +87,16 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'claude', 'gemini')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'claude', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
+
+# agy has no Codex-style filesystem sandbox: headless agy is either plan
+# (read-only, tool writes soft-denied) or --dangerously-skip-permissions
+# (unrestricted, NOT workspace-confined). It cannot honor a confined
+# workspace-write, so refuse it rather than granting host-wide writes.
+if ($Backend -eq 'agy' -and $Access -notin @('read-only', 'danger-full-access')) {
+    throw "agy has no confined workspace-write mode: headless agy is either plan (read-only) or --dangerously-skip-permissions (unrestricted, not workspace-confined). Run agy with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes."
+}
 
 $sourceCount = @($PromptFile, $Prompt) | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count
 if ($PromptStdin) { $sourceCount++ }
@@ -110,11 +117,15 @@ if ($Backend -eq 'codex') {
     if (-not $Model) { $Model = $Config["DELEGATE_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No model configured for profile $Profile" }
     if (-not $Effort) { $Effort = Get-ConfigValue -Key "DELEGATE_EFFORT_$profileUpper" -Default 'high' }
+} elseif ($Backend -eq 'agy') {
+    # agy slugs bake the effort tier into the name, so a profile resolves to a full
+    # agy slug and no separate -Effort is sent. -Model overrides for a single run.
+    if (-not $Model) { $Model = $Config["DELEGATE_AGY_MODEL_$profileUpper"] }
+    if (-not $Model) { throw "No agy model configured for profile $Profile" }
 } elseif ($PSBoundParameters.ContainsKey('Profile')) {
-    # config/models.env maps profiles to Codex model IDs only. Accepting -Profile
-    # here and quietly falling back to the CLI default is how a run silently uses
-    # the wrong model while the status JSON still reports the requested profile.
-    throw "-Profile resolves a model only for the codex backend; config/models.env holds Codex IDs. For -Backend $Backend, pass -Model explicitly."
+    # config/models.env maps profiles to codex and agy IDs; other backends (claude)
+    # have none, and silently falling back to the CLI default would mislabel the run.
+    throw "-Profile resolves a model only for the codex and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
 }
 
 function Find-ProjectRoot([string]$Start) {
@@ -241,7 +252,6 @@ foreach ($name in @('CI', 'GIT_TERMINAL_PROMPT', 'GIT_PAGER', 'PAGER', 'NO_COLOR
 }
 $env:CI = '1'; $env:GIT_TERMINAL_PROMPT = '0'; $env:GIT_PAGER = 'cat'; $env:PAGER = 'cat'; $env:NO_COLOR = '1'
 $ExitCode = 0
-$FallbackUsed = $false
 try {
     switch ($Backend) {
         'codex' {
@@ -264,21 +274,24 @@ try {
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
-        'gemini' {
-            $arguments = @('-p', $ComposedPrompt, '-o', 'text', '--include-directories', $ExecutionRoot)
-            if ($Model) { $arguments += @('--model', $Model) }
-            if ($Access -eq 'danger-full-access') { $arguments += '--yolo' }
-            Push-Location $ExecutionRoot
-            try { & gemini @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
-            finally { Pop-Location }
-            if ($ExitCode -ne 0 -and $FallbackModel -and (Get-Content $StderrLog -Raw) -match 'MODEL_CAPACITY_EXHAUSTED|No capacity available') {
-                $FallbackUsed = $true; $ExitCode = 0
-                $arguments = @('-p', $ComposedPrompt, '-o', 'text', '--include-directories', $ExecutionRoot, '--model', $FallbackModel)
-                if ($Access -eq 'danger-full-access') { $arguments += '--yolo' }
-                Push-Location $ExecutionRoot
-                try { & gemini @arguments 1>> $StdoutLog 2>> $StderrLog; $ExitCode = $LASTEXITCODE }
-                finally { Pop-Location }
+        'agy' {
+            # Antigravity CLI, headless print mode (-p): the prompt is the flag's
+            # value and the final answer is plain text on stdout. Access is limited
+            # to the two modes agy enforces headlessly (workspace-write is rejected
+            # earlier): read-only -> plan (writes soft-denied); full ->
+            # --dangerously-skip-permissions (unrestricted).
+            $arguments = @()
+            switch ($Access) {
+                'read-only' { $arguments += @('--mode', 'plan') }
+                'danger-full-access' { $arguments += '--dangerously-skip-permissions' }
             }
+            $arguments += @('--add-dir', $ExecutionRoot)
+            if ($Model) { $arguments += @('--model', $Model) }
+            if ($Effort) { $arguments += @('--effort', $Effort) }
+            $arguments += @('-p', $ComposedPrompt)
+            Push-Location $ExecutionRoot
+            try { & agy @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
     }
@@ -348,7 +361,6 @@ $status = [ordered]@{
     stderr = $StderrLog
     worktree = $WorktreeDir
     branch = $Branch
-    fallback_used = $FallbackUsed
 }
 $status | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $StatusFile -Encoding UTF8
 

@@ -1,8 +1,10 @@
-[CmdletBinding()]
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$ClaudeArguments
-)
+# Deliberately no param()/[CmdletBinding()] block. PowerShell resolves partial
+# parameter names against an advanced function's common parameters, so a declared
+# parameter set makes `claudex -p "..."` bind to -PipelineVariable and die with
+# "Cannot validate argument ... not a valid variable name" before claude starts.
+# Claude Code's own -p/--print is the headless flag, so that collision is not
+# hypothetical. Reading raw $args passes every flag through untouched.
+$ClaudeArguments = $args
 
 $ErrorActionPreference = 'Stop'
 $KitRoot = Split-Path -Parent $PSScriptRoot

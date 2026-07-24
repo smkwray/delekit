@@ -35,10 +35,9 @@ These are capability boundaries, not personas: the task prompt alone defines the
 work. Give each worker a unique runtime name, objective, context, file ownership,
 and acceptance criteria, and keep its agent ID.
 
-Use `SendMessage` to redirect or extend a running worker. It arrives when that
-worker's current tool call returns, and it cannot approve a permission prompt. If
-a shell call hangs, use `TaskStop`, then message the same agent ID to resume with
-a non-interactive command.
+A `SendMessage` to a running worker cannot approve a permission prompt. If a shell
+call hangs, `TaskStop` first, then message the same agent ID to resume with a
+non-interactive command.
 
 Run independent workers in parallel, never overlapping writers in one checkout.
 Review and integrate worktrees serially. The orchestrator owns final judgment and

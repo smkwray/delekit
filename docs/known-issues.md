@@ -6,6 +6,18 @@ debugging anything; most "the kit is broken" reports are one of these.
 Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 **[windows]**.
 
+## Start here — the ones that bite most
+
+| Symptom | Entry |
+|---|---|
+| A delegate ran on the wrong model, silently | [A misspelled spawn parameter silently downgrades a delegate](#a-misspelled-spawn-parameter-silently-downgrades-a-delegate-all) · [A delegate's own reply does not prove which model ran](#a-delegates-own-reply-does-not-prove-which-model-ran-all) |
+| Sessions broke after picking a model in-session | [A `/model` pick inside a gateway session breaks every other session](#a-model-pick-inside-a-gateway-session-breaks-every-other-session-all) |
+| Context limit looks wrong (200k, or compacts early) | [Every model shows a 200k context limit](#every-model-shows-a-200k-context-limit-through-the-gateway-all) · [A `[1m]` parent that compacts at 650k](#a-1m-parent-that-compacts-at-650k-or-any-sub-1m-number-all) |
+| Tandy dropped from 272k to 200k | [`/login` inside a `ccg` session silently kills the 272k Tandy window](#login-inside-a-ccg-session-silently-kills-the-272k-tandy-window-all) |
+| 502s through the gateway | [A brand-new Anthropic model 502s](#a-brand-new-anthropic-model-502s-through-the-gateway-all) · [Subagents that fall back to Haiku 502](#subagents-that-fall-back-to-haiku-502-through-the-gateway-all) |
+| Config changes had no effect | [The deployed proxy config silently drifts from the rendered template](#the-deployed-proxy-config-silently-drifts-from-the-rendered-template-all) |
+| Models missing from `/v1/models` | [Models disappear as you test them](#models-disappear-from-v1models-as-you-test-them-all) · [Empty model list right after a restart](#empty-model-list-right-after-a-restart-all) |
+
 ---
 
 ## A `/model` pick inside a gateway session breaks every other session **[all]**
@@ -122,6 +134,84 @@ when a configured alias is missing from the live catalog.
 
 ---
 
+## A brand-new Anthropic model 502s through the gateway **[all]**
+
+**Symptom.** A just-released Claude model works in a direct (`ccc`) session but,
+selected in a `ccg` session, every turn fails with *"502 unknown provider for
+model claude-opus-5"* (retrying 1/10…). `/v1/models` on the proxy does not list
+it. Hit 2026-07-24 with **Opus 5** on release day.
+
+**Cause.** CLIProxyAPI's Claude catalog is **not** discovered from your account —
+it is a fixed list: an embedded `models.json` plus a remote feed
+(`raw.githubusercontent.com/router-for-me/models`, refreshed every 3h, which
+overrides the embedded copy). Both lag new Anthropic models — even the same-day
+release binary (v7.2.98) lacked `claude-opus-5`. The OAuth Claude channel has no
+config-level way to add a model (`oauth-model-alias.claude` only aliases an
+already-served model; there is no include-list), so the router rejects the
+unknown model before it ever reaches Anthropic. `ccc` works because it talks to
+Anthropic directly, bypassing the proxy's catalog.
+
+**Fix.** Build a patched proxy binary that re-injects the missing model into the
+catalog after every load (embedded and each remote refresh), cloning an existing
+sibling so it inherits the current context window / thinking budget and — by
+keeping `type: "claude"` — routes to your Claude credential:
+
+```bash
+bin/build-cliproxy-opus5.sh          # macOS: clones the pinned tag, applies the
+                                     # patch, go-builds, installs, restarts launchd
+```
+
+```powershell
+bin\build-cliproxy-opus5.ps1         # Windows: same, for the versioned install
+                                     # layout and the Startup .vbs launcher
+```
+
+The change is `patches/cliproxy-claude-opus-5.patch` (a new `bridge_models.go`
+plus two one-line call sites). It keeps the normal remote refresh on, so all
+other models still update; the injected entry is a no-op the moment the upstream
+catalog adds the model. **To bridge the next new model**, add one
+`ensureClonedModel(...)` line to `ensureBridgeModels` in the patch. **To retire
+it**, once a stock CLIProxyAPI release lists the model, reinstall a stock binary
+and delete the patch + both scripts.
+
+The patch itself is platform-neutral (pure Go, `internal/registry/` only, no
+cgo) — it applied unmodified to a `v7.2.98` checkout on Windows and builds with
+`go build ./cmd/server`. Only the *wrapper* differs, in three ways the `.ps1`
+handles and the `.sh` does not:
+
+- **Version-pinned install dir.** Windows keeps the proxy in
+  `%LOCALAPPDATA%\CLIProxyAPI\<tag>\`, so a tag bump is a *new directory*, not
+  an in-place binary swap.
+- **`config.yaml` must be carried forward.** It lives beside the binary and
+  holds the client key, so a new version directory starts without it. `auth-dir`
+  points at the version-independent `..\auth`, so credentials survive untouched.
+- **No launchd.** A hidden `.vbs` in the Startup folder pins the absolute binary
+  and config paths; it has to be rewritten for the new directory. Build the
+  command with `Chr(34)` for quoting (see [windows.md](windows.md)).
+
+Verified on Windows 2026-07-24: `v7.2.98-opus5-bridge`, `/v1/models` lists
+`claude-opus-5`.
+
+**Reading the verification correctly.** A `502 unknown provider` is the
+bridge failing. A **401 `OAuth access token has been revoked`**, or
+`auth_unavailable: no auth available (providers=claude, model=claude-opus-5)`,
+is the bridge *working* — the proxy resolved the model to the Claude provider
+and forwarded it upstream, and the **credential** is what failed. Confirm by
+calling a model that predates the patch (`claude-opus-4-8`): if it fails the
+same way, the patch is fine and the Claude OAuth token needs re-issuing. A
+Codex-backed `claude-sonnet-4-6-tandy-*` alias still answering proves the proxy
+itself is healthy. Re-authenticate with:
+
+```powershell
+& "$env:LOCALAPPDATA\CLIProxyAPI\<tag>\cli-proxy-api.exe" -claude-login -config "$env:LOCALAPPDATA\CLIProxyAPI\<tag>\config.yaml"
+```
+
+Note that an OAuth login on another device can revoke this device's token for
+the same account — a gateway that worked yesterday and 401s today, on *every*
+Claude model at once, usually means exactly that rather than a proxy fault.
+
+---
+
 ## Tandy reaches the provider limit without compacting **[all]**
 
 **Symptom.** A long `tandy-*` run ends with *"Your input exceeds the context
@@ -144,18 +234,22 @@ retain the full client-visible alias. In a live native test, the same Tandy
 subagent compacted from 21,538 to 2,636 tokens under a deliberately lowered
 test threshold, continued working, and ended normally.
 
-The production fallback remains the proven 200k path. An opt-in
-`DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` profile seeds undocumented Claude
-Code client-data/cache fields, giving canonical Sonnet 4.6 both a 272k assumed
-maximum and a proactive 272k compact window. The launcher isolates that state
-under the local `delekit/claude-profile`, requires token authentication, and
-removes the process-wide context variables. Opus 4.8, Fable 5, and Sonnet 5
-`[1m]` parents use other canonical families and retain their full windows.
+`DELEKIT_TANDY_CONTEXT_MODE=clientdata-272k` is the **default**, and
+`native-200k` is the fallback. The 272k mode seeds undocumented Claude Code
+client-data/cache fields, giving canonical Sonnet 4.6 both a 272k assumed maximum
+and a proactive 272k compact window. The launcher isolates that state under the
+local `delekit/claude-profile`, requires token authentication, and removes the
+process-wide context variables. Opus 4.8, Fable 5, and Sonnet 5 `[1m]` parents use
+other canonical families and retain their full windows.
 
 This is family-scoped, not alias-scoped: a Sonnet 4.6 parent in the isolated
 profile will also compact at 272k. It relies on the internal
-`kelp_forest_sonnet`, `rowan_thicket`, and `autoCompactWindowsCache` fields and
-must be revalidated after every Claude Code update. Claude Code 2.1.217 on
+`kelp_forest_sonnet`, `rowan_thicket`, and `autoCompactWindowsCache` fields. The
+thing that actually breaks it is a first-party credential landing in the profile,
+not a Claude Code upgrade — the bundle logic for these fields was byte-identical
+across 2.1.217 and 2.1.219. The launcher now enforces the invariant on every run
+(see the `/login` entry above), so treat an unexplained drop to 200k as profile
+pollution first. Claude Code 2.1.217 on
 macOS was verified to show `29k/272k`, a 33k reserve, and an `auto (272k)`
 window for `claude-sonnet-4-6-tandy-luna`. A live CLIProxyAPI/native-agent test
 then produced one automatic boundary from 26,337 to 2,218 tokens in agent
@@ -306,11 +400,73 @@ KEY=$(python3 -c "import re,pathlib;print(re.search(r'^api-keys:\n\s+- \"([^\"]+
 
 ---
 
+## `/login` inside a `ccg` session silently kills the 272k Tandy window **[all]**
+
+**Symptom.** Tandy delegates that were compacting at 272k drop to 200k and stay
+there. Re-seeding turns the doctor green but the next session is back to 200k.
+Another device on the same kit and Claude Code version still works, so it looks
+like a version or platform difference. It is neither. Hit 2026-07-24 on bthc.
+
+**Cause.** The seed only holds while the isolated profile has **no first-party
+credential**. Claude Code treats these launches as `firstParty` (its internal
+`"gateway"` mode is gated on `CLAUDE_CODE_USE_GATEWAY`, which the launchers
+deliberately do not set — `ANTHROPIC_BASE_URL` is not consulted). Without a saved
+credential the first-party bootstrap fetch skips and nothing touches the seed.
+`/login` inside a gateway session writes one into the profile, which switches the
+bootstrap writer on; it then overwrites `autoCompactWindowsCache` with the
+server's value **once per model switch**. The `clientDataCache` fields survive, so
+the damage looks partial and the doctor's cache check keeps passing.
+
+**Fix — automatic.** `tools/seed_claude_context_cache.py` quarantines any
+credential it finds and strips the cached identity keys, so every `claudex` launch
+in `clientdata-272k` mode restores the invariant and prints one line when it acts.
+Nothing to do by hand. See that file's docstring for the mechanism and
+`tests/test_seed_context_cache.py` for the enforced behaviour.
+
+**Never run `/login` in a `ccg` session.** If the gateway is refusing Claude
+models, the credential to renew is **CLIProxyAPI's**, not Claude Code's — use the
+proxy binary's `-claude-login` (see the two entries above).
+
+**Trap.** `OK 272k cache` proves only that the seed is *present* — it stayed green
+throughout this failure. The acceptance gate is a live transcript with a
+`compact_boundary`, the same agent id, and a tool call after the boundary.
+
+---
+
+## Models disappear from `/v1/models` as you test them **[all]**
+
+**Symptom.** `/v1/models` lists a model; you call it; the call fails on auth; the
+model is then **gone from the next `/v1/models`**. Test a few models and the
+catalog shrinks each time, so it looks like the catalog is corrupting itself — or,
+right after deploying the Opus 5 bridge, like the patch is being undone by the
+3-hourly remote refresh. It is neither. Hit 2026-07-24 on bthc.
+
+**Cause.** CLIProxyAPI puts a model's auth into **cooldown** when an upstream
+call fails, and a model with no available auth stops being advertised. So the
+catalog is not shrinking at random — it is shrinking in exactly the order you
+exercised the models. One dead credential therefore looks like progressive
+catalog decay.
+
+**Fix.** Fix the credential, then **restart the proxy** — the cooldown is
+in-memory, and a restart republishes the full catalog. (Verified: a catalog down
+to 4 models came back to 7, including `claude-opus-5`, on restart alone.)
+
+**Do not** use this symptom to diagnose the bridge. The decisive test is to call
+a **stock catalog model that predates the patch** — `claude-fable-5` did the same
+thing, which proves the mechanism has nothing to do with the injected entry.
+Conversely, a Codex-backed `claude-sonnet-4-6-tandy-*` alias keeps working
+throughout, because it authenticates against a different credential — that
+contrast is the fastest way to tell "one credential is dead" from "the proxy is
+broken".
+
+---
+
 ## Empty model list right after a restart **[all]**
 
 The catalog loads a moment after the port opens. Retry before concluding the
 config is wrong. A genuinely missing model is usually a `CLIPROXY_EXCLUDE_*`
-pattern in `config/models.env` — edit there, rerender, restart.
+pattern in `config/models.env` — edit there, rerender, restart. A model that
+vanished *after* you called it is the cooldown entry above, not this one.
 
 ---
 

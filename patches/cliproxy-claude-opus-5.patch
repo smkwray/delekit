@@ -1,0 +1,79 @@
+diff --git a/internal/registry/bridge_models.go b/internal/registry/bridge_models.go
+new file mode 100644
+index 0000000..1f81d03
+--- /dev/null
++++ b/internal/registry/bridge_models.go
+@@ -0,0 +1,53 @@
++package registry
++
++// Bridge models are entries that the upstream Claude API already serves but the
++// CLIProxyAPI model catalog — both the embedded models.json and the remote
++// router-for-me/models feed — has not published yet. Without them the proxy
++// rejects the request with "unknown provider for model <id>" even though the
++// authenticated OAuth/API credential can serve it (a direct Claude Code session
++// reaches the same model fine).
++//
++// Each bridge entry is a shallow clone of an existing sibling already in the
++// catalog, so it inherits current metadata (Type, context window, thinking
++// budget, owner). Keeping Type: "claude" is what restores provider routing.
++//
++// ensureBridgeModels runs after every catalog load — the embedded load at init
++// and each 3-hourly remote refresh — so the entries survive the remote
++// overwrite. Each entry is a no-op once its id is present, so this self-heals
++// the moment the upstream catalog adds the model: DELETE the line then.
++func ensureBridgeModels(data *staticModelsJSON) {
++	if data == nil {
++		return
++	}
++	// Claude Opus 5 (1M context). Released 2026-07-24; not yet in the CLIProxyAPI
++	// catalog. Clones Opus 4.8 so it inherits the 1M window and thinking budget.
++	data.Claude = ensureClonedModel(data.Claude, "claude-opus-4-8", "claude-opus-5", "Claude Opus 5")
++}
++
++// ensureClonedModel returns models with a shallow clone of cloneFromID appended
++// under newID (and displayName, if non-empty) when newID is absent and the
++// template model exists. It is a no-op if newID is already present or the
++// template is missing.
++func ensureClonedModel(models []*ModelInfo, cloneFromID, newID, displayName string) []*ModelInfo {
++	var src *ModelInfo
++	for _, m := range models {
++		if m == nil {
++			continue
++		}
++		if m.ID == newID {
++			return models // already present (upstream added it, or prior injection)
++		}
++		if m.ID == cloneFromID {
++			src = m
++		}
++	}
++	if src == nil {
++		return models // template sibling not in catalog; nothing to clone
++	}
++	clone := *src
++	clone.ID = newID
++	if displayName != "" {
++		clone.DisplayName = displayName
++	}
++	return append(models, &clone)
++}
+diff --git a/internal/registry/model_updater.go b/internal/registry/model_updater.go
+index 4c398fb..4f6386f 100644
+--- a/internal/registry/model_updater.go
++++ b/internal/registry/model_updater.go
+@@ -120,6 +120,7 @@ func tryRefreshModels(ctx context.Context, label string) {
+ 		log.Warnf("%s: fetch failed from all URLs, keeping current data", label)
+ 		return
+ 	}
++	ensureBridgeModels(parsed)
+ 
+ 	// Detect changes before updating store.
+ 	changed := detectChangedProviders(oldData, parsed)
+@@ -302,6 +303,7 @@ func loadModelsFromBytes(data []byte, source string) error {
+ 	if err := validateModelsCatalog(&parsed); err != nil {
+ 		return fmt.Errorf("%s: validate models catalog: %w", source, err)
+ 	}
++	ensureBridgeModels(&parsed)
+ 
+ 	modelsCatalogStore.mu.Lock()
+ 	modelsCatalogStore.data = &parsed

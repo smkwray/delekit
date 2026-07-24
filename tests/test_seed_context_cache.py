@@ -7,7 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.seed_claude_context_cache import FAMILY, WINDOW, patch_document, seed
+from tools.seed_claude_context_cache import (
+    CREDENTIAL_FILE,
+    FAMILY,
+    WINDOW,
+    patch_document,
+    quarantine_credential,
+    seed,
+)
 
 
 class SeedContextCacheTest(unittest.TestCase):
@@ -53,6 +60,39 @@ class SeedContextCacheTest(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o640)
             self.assertEqual(json.loads(state_path.read_text())["theme"], "light")
+
+    def test_patch_strips_first_party_identity(self) -> None:
+        # A saved login in this profile switches on Claude Code's first-party
+        # bootstrap writer, which resets autoCompactWindowsCache on every model
+        # switch. The profile must stay identity-free for the 272k seed to hold.
+        patched = patch_document(
+            {"oauthAccount": {"emailAddress": "x@y.z"}, "userID": "u1", "theme": "dark"}
+        )
+        self.assertNotIn("oauthAccount", patched)
+        self.assertNotIn("userID", patched)
+        self.assertEqual(patched["theme"], "dark")
+
+    def test_quarantine_moves_credential_and_never_clobbers(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            credential = config_dir / CREDENTIAL_FILE
+            quarantine = config_dir / "quarantined-firstparty-auth"
+
+            self.assertIsNone(quarantine_credential(config_dir))
+
+            credential.write_text('{"claudeAiOauth":{"accessToken":"a"}}', encoding="utf-8")
+            moved = quarantine_credential(config_dir)
+            self.assertIsNotNone(moved)
+            self.assertFalse(credential.exists())
+            self.assertEqual(moved.parent, quarantine)
+            self.assertIn("accessToken", moved.read_text(encoding="utf-8"))
+
+            # A second login must not overwrite the first rescued copy.
+            credential.write_text('{"claudeAiOauth":{"accessToken":"b"}}', encoding="utf-8")
+            second = quarantine_credential(config_dir)
+            self.assertNotEqual(second, moved)
+            self.assertIn("a", moved.read_text(encoding="utf-8"))
+            self.assertIn("b", second.read_text(encoding="utf-8"))
 
     def test_seed_refuses_malformed_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

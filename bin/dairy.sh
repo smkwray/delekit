@@ -40,11 +40,11 @@ Prompt input (choose one):
   --prompt-stdin           read task from stdin (also automatic for piped stdin)
 
 Core options:
-  --backend NAME           codex (default), claude, or gemini
-  --profile NAME           terra (default), luna, or sol; codex backend only,
-                           since config/models.env maps profiles to Codex model IDs
-  --model ID               explicit per-run override; REQUIRED for --backend
-                           claude/gemini, which have no profile mapping
+  --backend NAME           codex (default), claude, or agy
+  --profile NAME           terra (default), luna, or sol; resolves a model for the
+                           codex and agy backends from config/models.env
+  --model ID               explicit per-run override; REQUIRED for --backend claude,
+                           which has no profile mapping
   --effort LEVEL           explicit reasoning effort override
   --access MODE            read-only, workspace-write, or danger-full-access
   --sandbox MODE           compatibility alias for --access
@@ -54,7 +54,6 @@ Core options:
   --no-auto-commit         leave worktree changes uncommitted
   --no-preamble            pass the task verbatim
   --fast                   enable Codex fast_mode for this run
-  --fallback-model ID      Gemini-only capacity fallback
   --json                   print machine-readable completion metadata
   --dry-run                resolve and print only; creates no files or worktrees
 
@@ -107,7 +106,6 @@ DIRTY_POLICY="fail"
 AUTO_COMMIT=1
 PREAMBLE=1
 FAST=0
-FALLBACK_MODEL=""
 JSON_OUTPUT=0
 DRY_RUN=0
 
@@ -128,7 +126,6 @@ while [[ $# -gt 0 ]]; do
     --no-auto-commit) AUTO_COMMIT=0; shift ;;
     --no-preamble) PREAMBLE=0; shift ;;
     --fast) FAST=1; shift ;;
-    --fallback-model) need_value "$@"; FALLBACK_MODEL="$2"; shift 2 ;;
     --json) JSON_OUTPUT=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -136,10 +133,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$BACKEND" in codex|claude|gemini) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
+case "$BACKEND" in codex|claude|agy) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
 case "$PROFILE" in terra|luna|sol) ;; *) echo "Profile must be terra, luna, or sol" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
+
+# agy has no Codex-style filesystem sandbox. Headless agy is either plan
+# (read-only, tool writes soft-denied) or --dangerously-skip-permissions
+# (unrestricted and NOT workspace-confined). It cannot honor a confined
+# workspace-write, so refuse it up front rather than granting host-wide writes
+# under a "workspace" label.
+if [[ "$BACKEND" == "agy" && "$ACCESS" != "read-only" && "$ACCESS" != "danger-full-access" ]]; then
+  echo "agy has no confined workspace-write mode: headless agy is either plan (read-only) or" >&2
+  echo "--dangerously-skip-permissions (unrestricted, not workspace-confined)." >&2
+  echo "Run agy with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
+  exit 2
+fi
 
 prompt_sources=0
 [[ -n "$PROMPT_FILE" ]] && ((prompt_sources+=1)) || true
@@ -160,16 +169,23 @@ fi
 profile_upper="$(printf '%s' "$PROFILE" | tr '[:lower:]' '[:upper:]')"
 model_var="DELEGATE_MODEL_${profile_upper}"
 effort_var="DELEGATE_EFFORT_${profile_upper}"
+agy_model_var="DELEGATE_AGY_MODEL_${profile_upper}"
 if [[ "$BACKEND" == "codex" ]]; then
   [[ -n "$MODEL" ]] || MODEL="${!model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No model configured for profile $PROFILE" >&2; exit 2; }
   [[ -n "$EFFORT" ]] || EFFORT="${!effort_var:-high}"
+elif [[ "$BACKEND" == "agy" ]]; then
+  # agy slugs bake the effort tier into the name, so a profile resolves to a full
+  # agy slug (DELEGATE_AGY_MODEL_<PROFILE>) and no separate --effort is sent.
+  # --model overrides the profile for a single run.
+  [[ -n "$MODEL" ]] || MODEL="${!agy_model_var:-}"
+  [[ -n "$MODEL" ]] || { echo "No agy model configured for profile $PROFILE" >&2; exit 2; }
 elif [[ "$PROFILE_EXPLICIT" -eq 1 ]]; then
-  # config/models.env maps profiles to Codex model IDs only. Accepting --profile
-  # here and quietly falling back to the CLI default is how a run silently uses
-  # the wrong model while the status JSON still reports the requested profile.
-  echo "--profile resolves a model only for the codex backend; config/models.env holds Codex IDs." >&2
-  echo "For --backend $BACKEND, pass --model explicitly (and --effort if the CLI supports it)." >&2
+  # config/models.env maps profiles to codex and agy model IDs. For other backends
+  # (claude), accepting --profile and quietly falling back to the CLI default is how
+  # a run silently uses the wrong model while the status JSON still reports the profile.
+  echo "--profile resolves a model only for the codex and agy backends; config/models.env holds their IDs." >&2
+  echo "For --backend $BACKEND, pass --model explicitly." >&2
   exit 2
 fi
 
@@ -289,7 +305,6 @@ printf '%s\n' "$COMPOSED_PROMPT" > "$prompt_log"
 
 export CI=1 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat PAGER=cat NO_COLOR=1
 exit_code=0
-fallback_used=0
 
 case "$BACKEND" in
   codex)
@@ -316,17 +331,22 @@ case "$BACKEND" in
     (cd "$EXEC_ROOT" && env -u CLAUDECODE claude "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
-  gemini)
-    args=(-p "$COMPOSED_PROMPT" -o text --include-directories "$EXEC_ROOT")
+  agy)
+    # Antigravity CLI, headless print mode (-p): the prompt is the flag's value and
+    # the final answer is plain text on stdout (no stdin piping). Access is limited
+    # to the two modes agy can actually enforce headlessly (workspace-write is
+    # rejected earlier): read-only -> plan (writes soft-denied); full ->
+    # --dangerously-skip-permissions (unrestricted).
+    args=()
+    case "$ACCESS" in
+      read-only) args+=(--mode plan) ;;
+      danger-full-access) args+=(--dangerously-skip-permissions) ;;
+    esac
+    args+=(--add-dir "$EXEC_ROOT")
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
-    [[ "$ACCESS" == "danger-full-access" ]] && args+=(--yolo)
-    (cd "$EXEC_ROOT" && gemini "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
-    if [[ "$exit_code" -ne 0 && -n "$FALLBACK_MODEL" ]] && grep -Eq 'MODEL_CAPACITY_EXHAUSTED|No capacity available' "$stderr_log"; then
-      fallback_used=1; exit_code=0
-      args=(-p "$COMPOSED_PROMPT" -o text --include-directories "$EXEC_ROOT" --model "$FALLBACK_MODEL")
-      [[ "$ACCESS" == "danger-full-access" ]] && args+=(--yolo)
-      (cd "$EXEC_ROOT" && gemini "${args[@]}") >>"$stdout_log" 2>>"$stderr_log" || exit_code=$?
-    fi
+    [[ -n "$EFFORT" ]] && args+=(--effort "$EFFORT")
+    args+=(-p "$COMPOSED_PROMPT")
+    (cd "$EXEC_ROOT" && agy "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
 esac
@@ -375,12 +395,12 @@ HANDOFF
 fi
 
 touch "$done_file"
-printf '{"status":"%s","exit_code":%s,"backend":"%s","profile":"%s","model":"%s","access":"%s","project_root":"%s","execution_root":"%s","report":"%s","stdout":"%s","stderr":"%s","worktree":"%s","branch":"%s","fallback_used":%s}\n' \
+printf '{"status":"%s","exit_code":%s,"backend":"%s","profile":"%s","model":"%s","access":"%s","project_root":"%s","execution_root":"%s","report":"%s","stdout":"%s","stderr":"%s","worktree":"%s","branch":"%s"}\n' \
   "$([[ "$exit_code" -eq 0 ]] && echo completed || echo failed)" "$exit_code" \
   "$(json_escape "$BACKEND")" "$(json_escape "$PROFILE")" "$(json_escape "${MODEL:-}")" "$(json_escape "$ACCESS")" \
   "$(json_escape "$PROJECT_ROOT")" "$(json_escape "$EXEC_ROOT")" "$(json_escape "$report_file")" \
   "$(json_escape "$stdout_log")" "$(json_escape "$stderr_log")" "$(json_escape "$WORKTREE_DIR")" \
-  "$(json_escape "$BRANCH")" "$([[ "$fallback_used" -eq 1 ]] && echo true || echo false)" > "$status_file"
+  "$(json_escape "$BRANCH")" > "$status_file"
 
 if [[ "$JSON_OUTPUT" -eq 1 ]]; then
   cat "$status_file"

@@ -101,4 +101,62 @@ assert os.path.isfile(obj['report']), obj
 assert 'no valid final report' in open(obj['report'], encoding='utf-8').read().lower()
 PY_EMPTY
 
-printf 'fallback runner smoke tests passed\n'
+# Antigravity (agy) backend: access maps to --mode, the prompt is the value of
+# -p (not stdin), and stdout is captured as the report. A fake agy records its
+# argv so the mapping is asserted without a real model.
+cat > "$TMP/fake-bin/agy" <<'FAKE_AGY'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$AGY_ARGS"   # NUL-delimited: the prompt arg contains newlines
+printf 'fake agy completed\n'
+FAKE_AGY
+chmod +x "$TMP/fake-bin/agy"
+
+XDG_STATE_HOME="$TMP/agy-state" PATH="$TMP/fake-bin:/usr/bin:/bin" AGY_ARGS="$TMP/agy.args" \
+  "$ROOT/bin/dairy.sh" read --backend agy --model gemini-3.6-flash-high \
+  --project-root "$TMP/repo" --prompt 'agy smoke' --json > "$TMP/agy.json"
+
+python3 - "$TMP/agy.json" "$TMP/agy.args" <<'PY_AGY'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'completed', obj
+assert obj['backend'] == 'agy', obj
+assert obj['access'] == 'read-only', obj
+assert 'fake agy completed' in open(obj['report'], encoding='utf-8').read(), obj
+args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]  # drop trailing empty
+i=args.index('--mode'); assert args[i+1] == 'plan', args      # read-only -> --mode plan
+assert 'gemini-3.6-flash-high' in args, args                  # explicit --model passed through
+assert args[-2] == '-p', args                                 # prompt is the single value of -p
+assert args[-1].endswith('agy smoke'), args                   # ...and carries the task text
+PY_AGY
+
+# agy profiles resolve to the configured slugs from config/models.env: the default
+# profile (terra) is gemini-3.6-flash-high, and sol is the strongest gemini-3.1-pro-high.
+# Dry-run needs no agy on PATH.
+XDG_STATE_HOME="$TMP/agy-dry" PATH="/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" read --backend agy --project-root "$TMP/repo" \
+  --prompt 'x' --dry-run --json > "$TMP/agy-terra.json"
+XDG_STATE_HOME="$TMP/agy-dry" PATH="/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" read --backend agy --profile sol --project-root "$TMP/repo" \
+  --prompt 'x' --dry-run --json > "$TMP/agy-sol.json"
+python3 - "$TMP/agy-terra.json" "$TMP/agy-sol.json" <<'PY_AGY_PROF'
+import json, sys
+terra=json.load(open(sys.argv[1], encoding='utf-8')); sol=json.load(open(sys.argv[2], encoding='utf-8'))
+assert terra['model'] == 'gemini-3.6-flash-high', terra   # default profile terra
+assert sol['model'] == 'gemini-3.1-pro-high', sol          # strongest profile sol
+PY_AGY_PROF
+
+# agy cannot confine writes, so workspace-write must be refused up front (exit 2)
+# before any log dir or worktree is created — never silently granted host-wide.
+set +e
+XDG_STATE_HOME="$TMP/agy-ws-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" workspace --backend agy --model x --project-root "$TMP/repo" \
+  --prompt 'nope' --worktree 2> "$TMP/agy-ws.err"
+ws_rc=$?
+set -e
+[[ "$ws_rc" -eq 2 ]]
+grep -q 'no confined workspace-write' "$TMP/agy-ws.err"
+[[ ! -e "$TMP/agy-ws-state" ]]                                                    # failed before log dir
+[[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]  # no worktree
+
+printf 'dairy runner smoke tests passed\n'

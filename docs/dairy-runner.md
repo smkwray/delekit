@@ -25,7 +25,7 @@ The runner prepends one short access line and, when applicable, one worktree lin
 
 ## Profiles and central model mapping
 
-For Codex, `--profile terra|luna|sol` and `-Profile` resolve model and effort from `config/models.env` (`terra` is the default). `--model`/`-Model` and `--effort`/`-Effort` override a single run. Claude and Gemini model choices remain explicit because their provider defaults are better handled by their own CLIs.
+For Codex and Antigravity (`agy`), `--profile terra|luna|sol` and `-Profile` resolve the model from `config/models.env` (`terra` is the default). For `agy` the profiles map to `terra` = `gemini-3.6-flash-high`, `luna` = `gemini-3.6-flash-low`, `sol` = `gemini-3.1-pro-high`; the slug carries the effort tier, so the runner sends no separate `--effort`. `--model`/`-Model` (and `--effort`/`-Effort` for Codex) override a single run. Claude model choices remain explicit because its provider default is better handled by its own CLI; `agy models` lists valid `--model` slugs.
 
 ## Examples
 
@@ -88,7 +88,9 @@ Use `--dirty-policy ignore` or `-DirtyPolicy ignore` only with awareness that un
 
 ## Permission behavior
 
-Codex `read-only` and `workspace-write` runs use the selected sandbox with `approval_policy=never`, so blocked operations fail instead of prompting. `danger-full-access` uses Codex's explicit bypass flag. Claude and Gemini backends cannot reproduce every Codex sandbox boundary; use them only when their CLI's permission behavior is acceptable.
+Codex `read-only` and `workspace-write` runs use the selected sandbox with `approval_policy=never`, so blocked operations fail instead of prompting. `danger-full-access` uses Codex's explicit bypass flag. Claude and Antigravity backends cannot reproduce every Codex sandbox boundary; use them only when their CLI's permission behavior is acceptable.
+
+`agy` has no Codex-style per-command sandbox. In headless mode it soft-denies any tool that would otherwise prompt (`write_file`, shell commands) unless `--dangerously-skip-permissions` is set — and that flag is all-or-nothing and **not** filesystem-confined (it will write outside the workspace). So the runner supports only two `agy` access modes: `read-only` → `--mode plan` (tool writes are soft-denied, so the run stays read-only), and `full` → `--dangerously-skip-permissions` (unrestricted). **`agy` cannot honor `workspace-write`** — it has no confined write mode — so `dairy workspace --backend agy` is refused up front; use `readonly`, or `full` for explicit unrestricted writes, or use codex/claude when you need confined workspace writes. The prompt is passed as the value of `-p`, not on stdin.
 
 **Computer use requires `full` mode.** Launching or scripting GUI apps — `open -a`, `osascript`/AppleScript, browsers — is blocked by the sandbox in `workspace-write` and `read-only`, so those tasks fail with permission errors rather than prompting. `full` runs unsandboxed; grant it only when the task genuinely needs the machine, and expect the worker to report every external effect (the access preamble instructs it to).
 
@@ -96,16 +98,16 @@ Codex `read-only` and `workspace-write` runs use the selected sandbox with `appr
 
 # Known issues
 
-## `--profile` silently ignored on non-Codex runner backends **[all]**
+## `--profile` resolves only for backends mapped in `config/models.env` **[all]**
 
-**Symptom.** `dairy … --backend claude --profile sol` runs on the CLI's default
-model while the status JSON reports `"profile":"sol"`.
+**Symptom.** `dairy … --backend claude --profile sol` would otherwise run on the
+CLI's default model while the status JSON reports `"profile":"sol"`.
 
-**Cause.** `config/models.env` maps profiles to Codex model IDs only, so the
-runner resolved a model from the profile for the `codex` backend alone.
+**Cause.** `config/models.env` maps profiles to Codex IDs (`DELEGATE_MODEL_*`)
+and agy IDs (`DELEGATE_AGY_MODEL_*`); Claude has no such mapping.
 
-**Fix.** Both runners now **fail** rather than guess. For `--backend claude` or
-`--backend gemini`, pass `--model` explicitly.
+**Fix.** Both runners resolve profiles for the `codex` and `agy` backends, and
+**fail** rather than guess for `--backend claude` — pass `--model` explicitly there.
 
 ---
 

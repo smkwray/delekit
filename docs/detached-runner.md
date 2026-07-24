@@ -18,8 +18,12 @@ Claude, with **no gateway** and **no Claude session** — drivable from a bare
 terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
 sibling of `tandy`, and the steerable sibling of `dairy`.
 
-Backends: **codex and claude only.** (No grok, no gemini for the detached path —
-gemini's CLI has no resume story we rely on.)
+Backends: **codex and claude only.** (No grok, no gemini, no Antigravity (`agy`)
+for the detached path — their headless CLIs emit no streaming JSON or session id
+we can scrape to observe activity and resume. `agy` print mode (`-p`) returns
+only the final plain-text answer, with no event stream and no resume handle on
+stdout, so it fits `dairy` but not this supervisor. It is the same reason gemini
+was excluded.)
 
 ## Non-negotiable: sessions cannot leak
 

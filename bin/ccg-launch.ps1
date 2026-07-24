@@ -1,8 +1,7 @@
-[CmdletBinding()]
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$ClaudeArguments
-)
+# No param()/[CmdletBinding()] block - see bin\claudex.ps1 for why: a declared
+# parameter set makes `-p` bind to the common parameter -PipelineVariable and
+# kills headless launches before claude starts.
+$ClaudeArguments = $args
 
 $ErrorActionPreference = 'Stop'
 $deviceEnv = if ($env:DELEGATE_DEVICE_ENV) {
