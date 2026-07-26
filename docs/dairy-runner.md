@@ -73,6 +73,9 @@ Each run writes:
 
 Large stdout/stderr traces expire according to `RUNNER_LOG_TTL_DAYS`; prompts, reports, status, and completion markers remain until deliberately removed. Missing or one-line `Execution error` reports are converted into a failed status rather than being accepted as successful completion.
 
+macOS desktop completion notifications are off by default. Set
+`DELEGATE_DESKTOP_NOTIFY=1` for a run or shell when you explicitly want them.
+
 ## Worktree behavior
 
 `--worktree`/`-Worktree`:

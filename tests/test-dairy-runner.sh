@@ -46,10 +46,18 @@ printf 'delegate output\n' > "$cwd/delegate-output.txt"
 printf 'fake codex completed\n' > "$report"
 FAKE
 chmod +x "$TMP/fake-bin/codex"
+cat > "$TMP/fake-bin/osascript" <<'FAKE_NOTIFY'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > "${DELEGATE_NOTIFY_MARKER:?}"
+FAKE_NOTIFY
+chmod +x "$TMP/fake-bin/osascript"
 
 XDG_STATE_HOME="$TMP/run-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  DELEGATE_NOTIFY_MARKER="$TMP/default-notify" \
   "$ROOT/bin/dairy.sh" write --backend codex --project-root "$TMP/repo" \
   --prompt 'write smoke' --worktree --json > "$TMP/result.json"
+[[ ! -e "$TMP/default-notify" ]]
 
 python3 - "$TMP/result.json" <<'PY'
 import json, os, sys
@@ -72,6 +80,13 @@ WORKTREE="$(python3 -c 'import json; print(json.load(open("'"$TMP/result.json"'"
 BRANCH="$(python3 -c 'import json; print(json.load(open("'"$TMP/result.json"'"))["branch"])')"
 git -C "$TMP/repo" worktree remove --force "$WORKTREE"
 git -C "$TMP/repo" branch -D "$BRANCH" >/dev/null
+
+# Desktop notifications require explicit opt-in.
+XDG_STATE_HOME="$TMP/notify-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  DELEGATE_DESKTOP_NOTIFY=1 DELEGATE_NOTIFY_MARKER="$TMP/opt-in-notify" \
+  "$ROOT/bin/dairy.sh" read --backend codex --project-root "$TMP/repo" \
+  --prompt 'notification smoke' --json > "$TMP/notify.json"
+grep -q 'delegate readonly finished' "$TMP/opt-in-notify"
 
 # A backend that exits zero without a usable final report must still fail.
 cat > "$TMP/fake-bin/codex" <<'FAKE_EMPTY'

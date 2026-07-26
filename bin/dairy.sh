@@ -417,7 +417,9 @@ else
   }
 fi
 
-if command -v osascript >/dev/null 2>&1; then
+# Desktop notifications are opt-in: unattended jobs and test runs must not
+# create ambient UI side effects merely because they finish.
+if [[ "${DELEGATE_DESKTOP_NOTIFY:-0}" == "1" ]] && command -v osascript >/dev/null 2>&1; then
   osascript -e "display notification \"Report: $(basename "$report_file")\" with title \"delegate $MODE finished\"" >/dev/null 2>&1 || true
 fi
 exit "$exit_code"
