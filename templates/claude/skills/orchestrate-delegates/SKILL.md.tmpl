@@ -53,3 +53,12 @@ default sandbox blocks it, tasks fail with permission errors, and full runs
 unsandboxed, so grant it only for tasks that genuinely need the machine. Pick
 models with the same profile words (terra, luna, sol) via the profile flag.
 Run either command with no arguments for usage.
+
+**Always watch herd turns.** Immediately after every successful `herd spawn` or
+`herd send`, start exactly one background shell-tool task for that turn:
+`herd result <task> --wait --timeout <seconds>`. Use the tool's
+`run_in_background` mode, not shell `&`, so completion wakes this session and is
+visible in the UI. Set the tool timeout at least as long as the command timeout.
+When it wakes, inspect the state and report; if the command timed out while the
+turn is still working, re-arm it. If you send a reply or follow-up, re-arm it for
+the resumed turn. Never leave a working herd turn without one live watcher.

@@ -7,6 +7,7 @@ detached helper against a controllable JSON event stream.
 """
 import contextlib
 import io
+import json
 import os
 import stat
 import sys
@@ -45,7 +46,7 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
         self.proj.cleanup()
         for k in ("DELEGATE_STATE_DIR", "DELEKIT_DEVICE_ID", "DELEGATE_CODEX_BIN",
-                  "DELEGATE_CLAUDE_BIN", "FAKE_HANG"):
+                  "DELEGATE_CLAUDE_BIN", "FAKE_HANG", "FAKE_DELAY_S"):
             os.environ.pop(k, None)
 
     def wait_done(self, task, timeout=20.0):
@@ -101,6 +102,20 @@ class TestSpawnResult(Base):
         self.assertTrue(self.wait_done("q1"))
         payload = ds.reconcile(ds.task_dir("q1"))
         self.assertEqual(payload["state"], "awaiting_reply")
+
+    def test_result_wait_blocks_until_the_turn_completes(self):
+        os.environ["FAKE_DELAY_S"] = "0.6"
+        self.spawn(name="watched")
+        output = io.StringIO()
+        started = time.monotonic()
+        with contextlib.redirect_stdout(output):
+            rc = ds.main(["result", "watched", "--wait", "--timeout", "5", "--json"])
+        elapsed = time.monotonic() - started
+        payload = json.loads(output.getvalue())
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(elapsed, 0.4)
+        self.assertEqual(payload["status"]["state"], "done")
+        self.assertIn("do the thing", payload["report"])
 
     def test_duplicate_task_name_rejected(self):
         self.spawn(name="dup")

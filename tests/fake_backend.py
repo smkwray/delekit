@@ -7,6 +7,8 @@ uses `-p`) and emits that backend's streaming-JSON event schema, then exits.
 Env knobs:
   FAKE_HANG=1   emit the session id, then sleep without further output
                 (exercises the stall watchdog).
+  FAKE_DELAY_S  pause after the session id before completing the turn
+                (exercises a blocking completion watcher).
 """
 import json
 import os
@@ -35,6 +37,10 @@ def main():
     if os.environ.get("FAKE_HANG") == "1":
         time.sleep(30)
         return 0
+
+    delay = float(os.environ.get("FAKE_DELAY_S", "0"))
+    if delay > 0:
+        time.sleep(delay)
 
     if "ASKQ" in prompt:
         body = "QUESTION: which config file should I edit?"

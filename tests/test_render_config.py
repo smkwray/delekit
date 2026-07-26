@@ -133,6 +133,18 @@ class RenderConfigTest(unittest.TestCase):
                              f'skill names a non-{prefix} agent: {token}')
         self.assertNotRegex(skill, r'\bgpt-[A-Za-z0-9._-]+')
 
+    def test_skill_requires_background_watchers_for_every_herd_turn(self) -> None:
+        # A detached herd process cannot notify its calling Claude session.
+        # The orchestrator must keep a background tool task waiting on the
+        # existing result primitive so lane completion wakes it automatically.
+        skill = SKILL.read_text(encoding='utf-8')
+        self.assertIn('Always watch herd turns', skill)
+        self.assertIn('every successful `herd spawn` or', skill)
+        self.assertIn('`herd send`', skill)
+        self.assertIn('herd result <task> --wait --timeout <seconds>', skill)
+        self.assertIn('`run_in_background` mode, not shell `&`', skill)
+        self.assertIn('Never leave a working herd turn without one live watcher', skill)
+
     def test_launchers_preserve_dynamic_model_selection(self) -> None:
         for name in ('claudex.sh', 'claudex.ps1'):
             text = (ROOT / 'bin' / name).read_text(encoding='utf-8')

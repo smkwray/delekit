@@ -70,7 +70,7 @@ assert obj['subagent'] is None
 assert obj['effort'] == '1'
 assert obj['attrib'] == '0'
 assert obj['tools'] == 'false'
-assert obj['config_dir'] is None
+assert obj['config_dir'].endswith('/xdg/delekit/claude-profile')
 assert obj['auto_window'] is None
 assert obj['max_context'] is None
 assert obj['disable_compact'] is None
