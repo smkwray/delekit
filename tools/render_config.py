@@ -198,7 +198,8 @@ def main() -> int:
                 stale.append(str(path.relative_to(ROOT)))
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8", newline="\n")
+            with path.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(content)
             print(path.relative_to(ROOT))
     if stale:
         print("Stale generated files:")

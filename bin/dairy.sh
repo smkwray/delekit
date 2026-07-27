@@ -41,8 +41,9 @@ Prompt input (choose one):
 
 Core options:
   --backend NAME           codex (default), claude, or agy
-  --profile NAME           terra (default), luna, or sol; resolves a model for the
-                           codex and agy backends from config/models.env
+  --profile NAME           backend-specific model profile from config/models.env:
+                           codex: terra (default), luna, sol
+                           agy: flash-high (default), flash-low, pro-high
   --model ID               explicit per-run override; REQUIRED for --backend claude,
                            which has no profile mapping
   --effort LEVEL           explicit reasoning effort override
@@ -93,8 +94,8 @@ esac
 shift
 
 BACKEND="${DELEGATE_BACKEND:-${RUNNER_DEFAULT_BACKEND:-codex}}"
-PROFILE="${DELEGATE_PROFILE:-terra}"
-PROFILE_EXPLICIT=0
+PROFILE="${DELEGATE_PROFILE:-}"
+if [[ -n "$PROFILE" ]]; then PROFILE_EXPLICIT=1; else PROFILE_EXPLICIT=0; fi
 MODEL=""
 EFFORT=""
 PROMPT_FILE=""
@@ -134,9 +135,27 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$BACKEND" in codex|claude|agy) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
-case "$PROFILE" in terra|luna|sol) ;; *) echo "Profile must be terra, luna, or sol" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
+
+if [[ "$BACKEND" == "codex" ]]; then
+  [[ -n "$PROFILE" ]] || PROFILE="terra"
+  case "$PROFILE" in terra|luna|sol) ;; *) echo "Codex profile must be terra, luna, or sol" >&2; exit 2 ;; esac
+elif [[ "$BACKEND" == "agy" ]]; then
+  [[ -n "$PROFILE" ]] || PROFILE="flash-high"
+  case "$PROFILE" in
+    terra) echo "Deprecated agy profile terra; use flash-high." >&2; PROFILE="flash-high" ;;
+    luna) echo "Deprecated agy profile luna; use flash-low." >&2; PROFILE="flash-low" ;;
+    sol) echo "Deprecated agy profile sol; use pro-high." >&2; PROFILE="pro-high" ;;
+  esac
+  case "$PROFILE" in flash-high|flash-low|pro-high) ;; *) echo "agy profile must be flash-high, flash-low, or pro-high" >&2; exit 2 ;; esac
+elif [[ "$PROFILE_EXPLICIT" -eq 1 ]]; then
+  echo "--profile resolves a model only for the codex and agy backends; config/models.env holds their IDs." >&2
+  echo "For --backend $BACKEND, pass --model explicitly." >&2
+  exit 2
+else
+  PROFILE=""
+fi
 
 # agy has no Codex-style filesystem sandbox. Headless agy is either plan
 # (read-only, tool writes soft-denied) or --dangerously-skip-permissions
@@ -166,7 +185,7 @@ else
 fi
 [[ -n "${TASK_PROMPT//[[:space:]]/}" ]] || { echo "Task prompt is empty." >&2; exit 2; }
 
-profile_upper="$(printf '%s' "$PROFILE" | tr '[:lower:]' '[:upper:]')"
+profile_upper="$(printf '%s' "$PROFILE" | tr '[:lower:]-' '[:upper:]_')"
 model_var="DELEGATE_MODEL_${profile_upper}"
 effort_var="DELEGATE_EFFORT_${profile_upper}"
 agy_model_var="DELEGATE_AGY_MODEL_${profile_upper}"
@@ -180,13 +199,6 @@ elif [[ "$BACKEND" == "agy" ]]; then
   # --model overrides the profile for a single run.
   [[ -n "$MODEL" ]] || MODEL="${!agy_model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No agy model configured for profile $PROFILE" >&2; exit 2; }
-elif [[ "$PROFILE_EXPLICIT" -eq 1 ]]; then
-  # config/models.env maps profiles to codex and agy model IDs. For other backends
-  # (claude), accepting --profile and quietly falling back to the CLI default is how
-  # a run silently uses the wrong model while the status JSON still reports the profile.
-  echo "--profile resolves a model only for the codex and agy backends; config/models.env holds their IDs." >&2
-  echo "For --backend $BACKEND, pass --model explicitly." >&2
-  exit 2
 fi
 
 find_project_root() {

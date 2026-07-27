@@ -195,6 +195,13 @@ class RenderConfigTest(unittest.TestCase):
         powershell = (ROOT / 'bin' / 'ccg-snippet.ps1').read_text(encoding='utf-8')
         self.assertIn('DelekitCcgLauncher', powershell)
 
+    def test_ccg_entry_points_bypass_permissions(self) -> None:
+        # Both ccg entry points must launch in bypass permissions. A Windows ccg
+        # that silently ran in the default mode was hit on a real device.
+        for name in ('ccg-snippet.sh', 'ccg-launch.ps1'):
+            text = (ROOT / 'bin' / name).read_text(encoding='utf-8')
+            self.assertIn('--dangerously-skip-permissions', text, name)
+
 
 if __name__ == '__main__':
     unittest.main()

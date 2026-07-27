@@ -145,21 +145,29 @@ assert args[-2] == '-p', args                                 # prompt is the si
 assert args[-1].endswith('agy smoke'), args                   # ...and carries the task text
 PY_AGY
 
-# agy profiles resolve to the configured slugs from config/models.env: the default
-# profile (terra) is gemini-3.6-flash-high, and sol is the strongest gemini-3.1-pro-high.
+# agy profiles use backend-specific names: flash-high is the default and pro-high
+# selects the strongest configured model. Legacy Codex profile names canonicalize
+# to their agy replacements during migration.
 # Dry-run needs no agy on PATH.
 XDG_STATE_HOME="$TMP/agy-dry" PATH="/usr/bin:/bin" \
   "$ROOT/bin/dairy.sh" read --backend agy --project-root "$TMP/repo" \
-  --prompt 'x' --dry-run --json > "$TMP/agy-terra.json"
+  --prompt 'x' --dry-run --json > "$TMP/agy-flash.json"
 XDG_STATE_HOME="$TMP/agy-dry" PATH="/usr/bin:/bin" \
-  "$ROOT/bin/dairy.sh" read --backend agy --profile sol --project-root "$TMP/repo" \
-  --prompt 'x' --dry-run --json > "$TMP/agy-sol.json"
-python3 - "$TMP/agy-terra.json" "$TMP/agy-sol.json" <<'PY_AGY_PROF'
+  "$ROOT/bin/dairy.sh" read --backend agy --profile pro-high --project-root "$TMP/repo" \
+  --prompt 'x' --dry-run --json > "$TMP/agy-pro.json"
+XDG_STATE_HOME="$TMP/agy-dry" PATH="/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" read --backend agy --profile terra --project-root "$TMP/repo" \
+  --prompt 'x' --dry-run --json > "$TMP/agy-legacy.json" 2> "$TMP/agy-legacy.err"
+python3 - "$TMP/agy-flash.json" "$TMP/agy-pro.json" "$TMP/agy-legacy.json" <<'PY_AGY_PROF'
 import json, sys
-terra=json.load(open(sys.argv[1], encoding='utf-8')); sol=json.load(open(sys.argv[2], encoding='utf-8'))
-assert terra['model'] == 'gemini-3.6-flash-high', terra   # default profile terra
-assert sol['model'] == 'gemini-3.1-pro-high', sol          # strongest profile sol
+flash=json.load(open(sys.argv[1], encoding='utf-8'))
+pro=json.load(open(sys.argv[2], encoding='utf-8'))
+legacy=json.load(open(sys.argv[3], encoding='utf-8'))
+assert flash['profile'] == 'flash-high' and flash['model'] == 'gemini-3.6-flash-high', flash
+assert pro['profile'] == 'pro-high' and pro['model'] == 'gemini-3.1-pro-high', pro
+assert legacy['profile'] == 'flash-high' and legacy['model'] == 'gemini-3.6-flash-high', legacy
 PY_AGY_PROF
+grep -q 'Deprecated agy profile terra; use flash-high' "$TMP/agy-legacy.err"
 
 # agy cannot confine writes, so workspace-write must be refused up front (exit 2)
 # before any log dir or worktree is created — never silently granted host-wide.

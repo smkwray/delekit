@@ -249,11 +249,18 @@ class CodexBackend(Backend):
             return ["--dangerously-bypass-approvals-and-sandbox"]
         return ["--sandbox", access, "-c", "approval_policy=never"]
 
+    def fast_args(self, meta: dict[str, Any]) -> list[str]:
+        # Explicit opt-in only: fast_mode is disabled unless the run asked for
+        # it, so it can never be inherited from ambient Codex config. Mirrors
+        # bin/dairy.sh.
+        return ["--enable" if meta.get("fast") else "--disable", "fast_mode"]
+
     def spawn_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
         exec_root = meta["exec_root"]
         argv = [self.locate_bin(), "exec", "--json", "--cd", exec_root,
                 "--model", meta["model"], "-c", f"model_reasoning_effort={meta['effort']}",
                 "--skip-git-repo-check", "--color", "never"]
+        argv += self.fast_args(meta)
         argv += self.sandbox_args(meta["access"])
         argv.append("-")
         return argv, meta["prompt"], exec_root
@@ -266,6 +273,7 @@ class CodexBackend(Backend):
         argv = [self.locate_bin(), "exec", "resume", "--json",
                 "--model", meta["model"], "-c", f"model_reasoning_effort={meta['effort']}",
                 "--skip-git-repo-check"]
+        argv += self.fast_args(meta)
         if meta["access"] == "danger-full-access":
             argv.append("--dangerously-bypass-approvals-and-sandbox")
         else:
@@ -721,6 +729,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         "task": task, "state": "working", "backend": args.backend, "model": model, "effort": effort,
         "access": access, "repo": project_root, "exec_root": exec_root, "worktree": worktree,
         "branch": branch, "auto_commit": not args.no_auto_commit, "prompt": composed,
+        "fast": bool(getattr(args, "fast", False)),
         "pid": None, "session_id": None, "owner": owner_id(), "created_utc": now(),
         "stall_after_s": int(args.stall_after), "deadline_utc": now() + int(args.deadline),
     }
@@ -960,6 +969,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dirty-policy", default="fail", choices=["fail", "ignore"])
     sp.add_argument("--no-auto-commit", action="store_true")
     sp.add_argument("--no-preamble", action="store_true")
+    sp.add_argument("--fast", action="store_true",
+                    help="enable Codex fast_mode for this run (explicit opt-in; codex backend only)")
     sp.add_argument("--name")
     sp.set_defaults(func=cmd_spawn)
 

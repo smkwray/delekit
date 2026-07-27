@@ -32,8 +32,24 @@ foreach ($key in $keys) {
 }
 [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', $null, 'Process')
 
+# ccg runs in bypass permissions, matching bin\ccg-snippet.sh. Keep the two
+# entry points identical: a Windows ccg that lands in the default (or auto) mode
+# also drags in the permission classifier, which fails the whole tool call
+# whenever the gateway cannot serve the session model.
+# The caller still wins -- Claude Code rejects --dangerously-skip-permissions
+# together with an explicit --permission-mode, so `ccg --permission-mode plan`
+# must not have the flag injected behind it.
+$PermissionArguments = @('--dangerously-skip-permissions')
+foreach ($arg in $ClaudeArguments) {
+    if ($arg -eq '--dangerously-skip-permissions' -or
+        $arg -eq '--permission-mode' -or $arg -like '--permission-mode=*') {
+        $PermissionArguments = @()
+        break
+    }
+}
+
 try {
-    & (Join-Path $PSScriptRoot 'claudex.ps1') @ClaudeArguments
+    & (Join-Path $PSScriptRoot 'claudex.ps1') @PermissionArguments @ClaudeArguments
     exit $LASTEXITCODE
 } finally {
     foreach ($key in $keys) {

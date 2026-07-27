@@ -7,8 +7,7 @@ param(
     [ValidateSet('codex', 'claude', 'agy')]
     [string]$Backend,
 
-    [ValidateSet('terra', 'luna', 'sol')]
-    [string]$Profile = 'terra',
+    [string]$Profile,
 
     [string]$Model,
     [string]$Effort,
@@ -90,6 +89,35 @@ if (-not $Backend) {
 if ($Backend -notin @('codex', 'claude', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
+$ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
+if (-not $Profile -and $env:DELEGATE_PROFILE) {
+    $Profile = $env:DELEGATE_PROFILE
+    $ProfileExplicit = $true
+}
+if ($Backend -eq 'codex') {
+    if (-not $Profile) { $Profile = 'terra' }
+    if ($Profile -notin @('terra', 'luna', 'sol')) { throw 'Codex profile must be terra, luna, or sol' }
+} elseif ($Backend -eq 'agy') {
+    if (-not $Profile) { $Profile = 'flash-high' }
+    $legacyAgyProfiles = @{
+        terra = 'flash-high'
+        luna = 'flash-low'
+        sol = 'pro-high'
+    }
+    if ($legacyAgyProfiles.ContainsKey($Profile)) {
+        $replacement = $legacyAgyProfiles[$Profile]
+        Write-Warning "Deprecated agy profile $Profile; use $replacement."
+        $Profile = $replacement
+    }
+    if ($Profile -notin @('flash-high', 'flash-low', 'pro-high')) {
+        throw 'agy profile must be flash-high, flash-low, or pro-high'
+    }
+} elseif ($ProfileExplicit) {
+    throw "-Profile resolves a model only for the codex and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
+} else {
+    $Profile = ''
+}
+
 # agy has no Codex-style filesystem sandbox: headless agy is either plan
 # (read-only, tool writes soft-denied) or --dangerously-skip-permissions
 # (unrestricted, NOT workspace-confined). It cannot honor a confined
@@ -112,7 +140,7 @@ if ($PromptFile) {
 }
 if ([string]::IsNullOrWhiteSpace($TaskPrompt)) { throw 'Task prompt is empty.' }
 
-$profileUpper = $Profile.ToUpperInvariant()
+$profileUpper = $Profile.Replace('-', '_').ToUpperInvariant()
 if ($Backend -eq 'codex') {
     if (-not $Model) { $Model = $Config["DELEGATE_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No model configured for profile $Profile" }
@@ -122,10 +150,6 @@ if ($Backend -eq 'codex') {
     # agy slug and no separate -Effort is sent. -Model overrides for a single run.
     if (-not $Model) { $Model = $Config["DELEGATE_AGY_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No agy model configured for profile $Profile" }
-} elseif ($PSBoundParameters.ContainsKey('Profile')) {
-    # config/models.env maps profiles to codex and agy IDs; other backends (claude)
-    # have none, and silently falling back to the CLI default would mislabel the run.
-    throw "-Profile resolves a model only for the codex and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
 }
 
 function Find-ProjectRoot([string]$Start) {
@@ -289,8 +313,12 @@ try {
             if ($Model) { $arguments += @('--model', $Model) }
             if ($Effort) { $arguments += @('--effort', $Effort) }
             $arguments += @('-p', $ComposedPrompt)
+            # Resolve the application explicitly. An interactive PowerShell profile
+            # may define an `agy` function with extra flags; dairy's access boundary
+            # must not change according to caller command precedence.
+            $agyExecutable = (Get-Command agy.exe -CommandType Application -ErrorAction Stop).Source
             Push-Location $ExecutionRoot
-            try { & agy @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            try { & $agyExecutable @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }

@@ -25,19 +25,21 @@ The runner prepends one short access line and, when applicable, one worktree lin
 
 ## Profiles and central model mapping
 
-For Codex and Antigravity (`agy`), `--profile terra|luna|sol` and `-Profile` resolve the model from `config/models.env` (`terra` is the default). For `agy` the profiles map to `terra` = `gemini-3.6-flash-high`, `luna` = `gemini-3.6-flash-low`, `sol` = `gemini-3.1-pro-high`; the slug carries the effort tier, so the runner sends no separate `--effort`. `--model`/`-Model` (and `--effort`/`-Effort` for Codex) override a single run. Claude model choices remain explicit because its provider default is better handled by its own CLI; `agy models` lists valid `--model` slugs.
+Profiles are backend-specific and resolve through `config/models.env`. Codex uses `terra` (default), `luna`, and `sol`. Antigravity (`agy`) uses `flash-high` (default) = `gemini-3.6-flash-high`, `flash-low` = `gemini-3.6-flash-low`, and `pro-high` = `gemini-3.1-pro-high`. The agy slug carries the effort tier, so the runner sends no separate `--effort`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window and are canonicalized in status output. `--model`/`-Model` (and `--effort`/`-Effort` for Codex) override a single run. Claude model choices remain explicit because its provider default is better handled by its own CLI; `agy models` lists valid `--model` slugs.
 
 ## Examples
 
 ```bash
 dairy write --profile terra --prompt-file task.md --worktree
 dairy read --profile sol --prompt-stdin < audit.md
+dairy read --backend agy --profile flash-high --prompt 'audit this checkout'
 dairy full --model explicit-provider-id --prompt 'authorized host task'
 ```
 
 ```powershell
 dairy write -Profile terra -PromptFile task.md -Worktree
 Get-Content audit.md -Raw | dairy read -Profile sol -PromptStdin
+dairy read -Backend agy -Profile flash-high -Prompt 'audit this checkout'
 dairy full -Model explicit-provider-id -Prompt 'authorized host task'
 ```
 
@@ -106,8 +108,8 @@ Codex `read-only` and `workspace-write` runs use the selected sandbox with `appr
 **Symptom.** `dairy … --backend claude --profile sol` would otherwise run on the
 CLI's default model while the status JSON reports `"profile":"sol"`.
 
-**Cause.** `config/models.env` maps profiles to Codex IDs (`DELEGATE_MODEL_*`)
-and agy IDs (`DELEGATE_AGY_MODEL_*`); Claude has no such mapping.
+**Cause.** `config/models.env` maps backend-specific profiles to Codex IDs
+(`DELEGATE_MODEL_*`) and agy IDs (`DELEGATE_AGY_MODEL_*`); Claude has no such mapping.
 
 **Fix.** Both runners resolve profiles for the `codex` and `agy` backends, and
 **fail** rather than guess for `--backend claude` — pass `--model` explicitly there.

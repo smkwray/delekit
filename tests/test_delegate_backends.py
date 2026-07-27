@@ -66,6 +66,12 @@ class Base(unittest.TestCase):
 
 
 class TestParsers(unittest.TestCase):
+    def test_codex_fast_mode_is_explicit(self):
+        b = ds.BACKENDS["codex"]
+        self.assertEqual(b.fast_args({"fast": True}), ["--enable", "fast_mode"])
+        self.assertEqual(b.fast_args({"fast": False}), ["--disable", "fast_mode"])
+        self.assertEqual(b.fast_args({}), ["--disable", "fast_mode"])
+
     def test_codex_parser_session_and_message(self):
         b = ds.BACKENDS["codex"]
         self.assertEqual(b.parse({"session_id": "s1"}).get("session_id"), "s1")

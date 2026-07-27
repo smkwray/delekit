@@ -16,6 +16,7 @@ Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 | Tandy dropped from 272k to 200k | [`/login` inside a `ccg` session silently kills the 272k Tandy window](#login-inside-a-ccg-session-silently-kills-the-272k-tandy-window-all) |
 | 502s through the gateway | [A brand-new Anthropic model 502s](#a-brand-new-anthropic-model-502s-through-the-gateway-all) · [Subagents that fall back to Haiku 502](#subagents-that-fall-back-to-haiku-502-through-the-gateway-all) |
 | Config changes had no effect | [The deployed proxy config silently drifts from the rendered template](#the-deployed-proxy-config-silently-drifts-from-the-rendered-template-all) |
+| `ccg` prompts for permissions, or auto mode blocks tool calls | [Windows `ccg` did not run in bypass permissions](#windows-ccg-did-not-run-in-bypass-permissions-windows) |
 | Models missing from `/v1/models` | [Models disappear as you test them](#models-disappear-from-v1models-as-you-test-them-all) · [Empty model list right after a restart](#empty-model-list-right-after-a-restart-all) |
 
 ---
@@ -310,6 +311,34 @@ Verify on every device:
 ```bash
 zsh -ic 'ccg --version >/dev/null 2>&1; echo "${ANTHROPIC_BASE_URL:-unset}"'   # -> unset
 ```
+
+---
+
+## Windows `ccg` did not run in bypass permissions **[windows]**
+
+**Symptom.** `ccg` on Windows prompts for permissions, and in auto mode tool
+calls fail outright with *"claude-opus-5[1m] is temporarily unavailable, so auto
+mode cannot determine the safety of Bash right now."* The same `ccg` on macOS
+never prompts. Hit 2026-07-25.
+
+**Cause.** Two entry points, one behavior, only one of them implemented it.
+`bin/ccg-snippet.sh` execs `claudex --dangerously-skip-permissions`; the Windows
+chain (`ccg.cmd` → `ccg-launch.ps1` → `claudex.ps1`) passed the user's arguments
+straight through, so the session fell back to whatever the profile's
+`settings.json` held. Auto mode then made every Bash call depend on a classifier
+round-trip to the session model *through the gateway* — one upstream blip or
+proxy hiccup and the tool call is blocked rather than merely slow.
+
+**Fix.** `ccg-launch.ps1` injects `--dangerously-skip-permissions` unless the
+caller already passed it or an explicit `--permission-mode` (Claude Code rejects
+the two together, so `ccg --permission-mode plan` must stay untouched). A test in
+`tests/test_render_config.py` asserts both entry points carry the flag. Verify by
+shimming `claude` on `PATH` and reading the recorded argv — the launch line
+should read `--model <parent> --dangerously-skip-permissions …`.
+
+Do not treat this as the fix for a real classifier failure: if `ccc` sessions
+also report a model unavailable, check `/v1/models` and probe `/v1/messages`
+first (see the 502 entries above).
 
 ---
 
