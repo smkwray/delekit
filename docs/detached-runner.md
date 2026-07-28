@@ -151,6 +151,9 @@ Core opts mirror `dairy`: `--backend codex|claude`, `--profile terra|luna|sol`
 `--no-preamble`, `--json`. Access→sandbox/permission mapping and the access
 preamble are lifted verbatim from `dairy` so the two runners stay consistent.
 
+`--worktree` always creates `<project>/.worktrees/<name>` and requires
+`.worktrees/` in the project's root `.gitignore`.
+
 **Computer use requires `full` mode**, exactly as in `dairy`: the sandbox in
 `workspace`/`readonly` blocks `open -a`, `osascript`, and browser control, so GUI
 tasks fail with permission errors rather than prompting. `full` runs unsandboxed

@@ -23,6 +23,7 @@ REQUIRED = [
     "bin/dairy.sh",
     "bin/dairy.ps1",
     "bin/prune-worktrees.sh",
+    "tools/worktree_manager.py",
     "bin/claudex.ps1",
     "bin/ccg.cmd",
     "bin/ccg-launch.ps1",

@@ -3,10 +3,9 @@
 # when its work is already in the main branch and nothing would be lost by
 # deleting it. Anything else is kept and reported, never silently removed.
 #
-# Covers every worktree registered with the repo (`git worktree list`), wherever
-# it lives — the standard project-local <project>/.worktrees/<name> (owner
-# convention), native Claude Code isolation (.claude/worktrees/agent-*), and the
-# dairy --worktree runner's legacy <parent>/.delegate-worktrees/<project>/*.
+# Covers every worktree registered with the repo (`git worktree list`). Delekit
+# creates native Tandy, dairy, and herd worktrees only at the owner-standard
+# project-local path: <project>/.worktrees/<name>.
 #
 # A worktree is REMOVED only when ALL hold:
 #   - not the main checkout, not locked, not the current directory

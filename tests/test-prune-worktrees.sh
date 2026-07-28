@@ -12,20 +12,22 @@ repo="$TMP/repo"
 mkdir -p "$repo"; cd "$repo"
 git init -q; git commit -q --allow-empty -m base
 
-mk() { git worktree add -q -b "$1" ".claude/worktrees/agent-$1" HEAD; }
+printf '.worktrees/\n' > .gitignore
+git add .gitignore; git commit -q -m ignore-worktrees
+mk() { git worktree add -q -b "$1" ".worktrees/agent-$1" HEAD; }
 
 # (a) finished: branched, no unique commits, only cruft untracked -> REMOVE
-mk done1; ( cd ".claude/worktrees/agent-done1" && mkdir -p .venv && echo x > .venv/pyvenv.cfg )
+mk done1; ( cd ".worktrees/agent-done1" && mkdir -p .venv && echo x > .venv/pyvenv.cfg )
 
 # (b) unmerged work: a real commit not in main HEAD -> KEEP
-mk unmerged; ( cd ".claude/worktrees/agent-unmerged" && echo feature > f.txt && git add f.txt && git commit -q -m work )
+mk unmerged; ( cd ".worktrees/agent-unmerged" && echo feature > f.txt && git add f.txt && git commit -q -m work )
 
 # (c) dirty tracked file -> KEEP
 echo tracked > shared.txt; git add shared.txt; git commit -q -m add-shared
-mk dirty; ( cd ".claude/worktrees/agent-dirty" && echo changed >> shared.txt )
+mk dirty; ( cd ".worktrees/agent-dirty" && echo changed >> shared.txt )
 
 # (d) untracked non-cruft file (real work someone forgot to commit) -> KEEP
-mk untracked; ( cd ".claude/worktrees/agent-untracked" && echo important > NOTES.md )
+mk untracked; ( cd ".worktrees/agent-untracked" && echo important > NOTES.md )
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
@@ -34,10 +36,10 @@ out="$("$PRUNE" --project-root "$repo" --idle-min 0 --apply 2>&1)"
 echo "$out"
 
 echo "$out" | grep -q "removed worktree.*agent-done1" || fail "did not remove the finished worktree"
-[[ -d "$repo/.claude/worktrees/agent-done1" ]] && fail "finished worktree still on disk"
-[[ -d "$repo/.claude/worktrees/agent-unmerged" ]]  || fail "removed a worktree with unmerged commits"
-[[ -d "$repo/.claude/worktrees/agent-dirty" ]]     || fail "removed a worktree with tracked changes"
-[[ -d "$repo/.claude/worktrees/agent-untracked" ]] || fail "removed a worktree with untracked work"
+[[ -d "$repo/.worktrees/agent-done1" ]] && fail "finished worktree still on disk"
+[[ -d "$repo/.worktrees/agent-unmerged" ]]  || fail "removed a worktree with unmerged commits"
+[[ -d "$repo/.worktrees/agent-dirty" ]]     || fail "removed a worktree with tracked changes"
+[[ -d "$repo/.worktrees/agent-untracked" ]] || fail "removed a worktree with untracked work"
 
 # The kept branch's commit must still exist.
 git -C "$repo" rev-parse --verify unmerged >/dev/null 2>&1 || fail "deleted an unmerged branch"

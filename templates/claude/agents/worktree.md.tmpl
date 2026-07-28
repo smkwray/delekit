@@ -4,6 +4,11 @@ description: Read-write delegate — {{AGENT_PROFILE}} profile ({{PROFILE_HINT}}
 model: {{AGENT_MODEL}}
 permissionMode: acceptEdits
 isolation: worktree
+hooks:
+  WorktreeCreate:
+    - hooks:
+        - type: command
+          command: delekit-worktree hook
 disallowedTools:
   - Agent
   - "mcp__*"

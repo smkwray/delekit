@@ -27,6 +27,7 @@ assert_file "$TMP/claude/skills/orchestrate-delegates/SKILL.md"
 [[ -e "$TMP/claude/agents/delekit" ]] && {
   echo "FAIL: default profile must not carry delegate agents by default" >&2; exit 1; }
 assert_grep "exec $ROOT/bin/claudex.sh" "$TMP/bin/claudex"
+assert_grep "exec $ROOT/tools/worktree_manager.py" "$TMP/bin/delekit-worktree"
 
 # --also-default-profile restores the legacy dual install into the default
 # profile (idempotent --copy, so it reuses the existing dirs).

@@ -22,7 +22,8 @@ They are capability boundaries rather than personas, and the same three are
 generated for every model profile:
 
 - `tandy-<profile>`: broad normal tools for the only writer in a checkout.
-- `tandy-<profile>-worktree`: the same behavior with native `isolation: worktree`.
+- `tandy-<profile>-worktree`: the same behavior with native `isolation: worktree`
+  and a scoped hook that places it under `<project>/.worktrees/`.
 - `tandy-<profile>-readonly`: file tools plus read-only `Bash` under `permissionMode: plan`; no source edits.
 
 Capability is expressed statically; the model profile is chosen by picking the

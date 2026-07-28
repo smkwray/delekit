@@ -4,6 +4,11 @@ description: Read-write delegate — luna profile (fast tier; mechanical, high-v
 model: claude-sonnet-4-6-tandy-luna
 permissionMode: acceptEdits
 isolation: worktree
+hooks:
+  WorktreeCreate:
+    - hooks:
+        - type: command
+          command: delekit-worktree hook
 disallowedTools:
   - Agent
   - "mcp__*"

@@ -100,6 +100,21 @@ function Install-CommandWrapper {
     Write-Host "Installed: $Path"
 }
 
+function Install-PythonWrapper {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Target)
+    $content = "@$Python `"$Target`" %*"
+    if (Test-Path -LiteralPath $Path) {
+        $existing = (Get-Content -LiteralPath $Path -Raw).TrimEnd("`r", "`n")
+        if ($existing -eq $content) {
+            Write-Host "Already installed: $Path"
+            return
+        }
+        throw "Refusing to overwrite existing wrapper: $Path"
+    }
+    Set-Content -LiteralPath $Path -Encoding Ascii -Value $content
+    Write-Host "Installed: $Path"
+}
+
 # Reinstalling on a device set up under the old dual-install convention: clear a
 # stale, managed default-profile agents junction so the scope self-heals to
 # gateway-only. Only ever removes our own managed link, never user content.
@@ -166,6 +181,8 @@ $ClaudeXWrapper = Join-Path $BinDir 'claudex.cmd'
 Install-CommandWrapper -Path $ClaudeXWrapper -Target $ClaudeXTarget
 Install-CommandWrapper -Path (Join-Path $BinDir 'dairy.cmd') -Target $DairyTarget
 Install-CommandWrapper -Path (Join-Path $BinDir 'herd.cmd') -Target $HerdTarget
+Install-PythonWrapper -Path (Join-Path $BinDir 'delekit-worktree.cmd') `
+    -Target (Join-Path $KitRoot 'tools\worktree_manager.py')
 
 $DeviceEnv = Join-Path $DeviceDir 'device.env'
 # Carry over a device.env from the pre-rename location so a switchover keeps the
@@ -210,6 +227,6 @@ Next:
 4. Open a new terminal and run: claudex
 5. Start a new Claude Code session if the agents directory did not exist earlier.
 
-Optional project setting: merge config\claude-settings.fragment.json to base
-native worktrees on the current committed HEAD.
+Native Tandy worktrees use the current committed HEAD and are placed under
+the project's ignored .worktrees\ directory.
 "@

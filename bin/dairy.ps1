@@ -205,8 +205,7 @@ if ($Worktree) {
     }
     $BaseSha = ((& git -C $ProjectRoot rev-parse HEAD) -join '').Trim()
     $Branch = "delegate/${Mode}-${timestamp}"
-    $WorktreeRoot = if ($env:DELEGATE_WORKTREE_DIR) { $env:DELEGATE_WORKTREE_DIR } else { Join-Path (Split-Path -Parent $ProjectRoot) '.delegate-worktrees' }
-    $WorktreeDir = Join-Path (Join-Path $WorktreeRoot (Split-Path -Leaf $ProjectRoot)) "${Mode}-${timestamp}"
+    $WorktreeDir = Join-Path (Join-Path $ProjectRoot '.worktrees') "${Mode}-${timestamp}"
     $ExecutionRoot = $WorktreeDir
 }
 
@@ -264,9 +263,16 @@ Get-ChildItem -LiteralPath $LogDir -File -ErrorAction SilentlyContinue |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($Worktree) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $WorktreeDir) | Out-Null
-    & git -C $ProjectRoot worktree add -b $Branch $WorktreeDir HEAD | Out-Null
+    $Python = @('py', 'python', 'python3') |
+        Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
+        Select-Object -First 1
+    if (-not $Python) { throw 'Python 3 is required to create a worktree.' }
+    $created = & $Python (Join-Path $KitRoot 'tools\worktree_manager.py') create `
+        --project-root $ProjectRoot --name "${Mode}-${timestamp}" `
+        --branch $Branch --base HEAD
     if ($LASTEXITCODE -ne 0) { throw "Failed to create worktree: $WorktreeDir" }
+    $WorktreeDir = (@($created)[-1]).Trim()
+    $ExecutionRoot = $WorktreeDir
 }
 Set-Content -LiteralPath $PromptLog -Value $ComposedPrompt -Encoding UTF8
 

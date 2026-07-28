@@ -108,6 +108,7 @@ class RenderConfigTest(unittest.TestCase):
             worktree = (AGENTS / f'{prefix}-{profile}-worktree.md').read_text(encoding='utf-8')
             # Without this, parallel writers share one checkout and clobber it.
             self.assertIn('isolation: worktree', worktree)
+            self.assertIn('command: delekit-worktree hook', worktree)
 
             readonly = (AGENTS / f'{prefix}-{profile}-readonly.md').read_text(encoding='utf-8')
             self.assertIn('permissionMode: plan', readonly)

@@ -5,6 +5,7 @@ config.yaml
 
 # Local orchestration state + roadmap — private, never tracked
 do/
+.worktrees/
 
 # OS / editor
 .DS_Store

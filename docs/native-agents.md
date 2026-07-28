@@ -68,9 +68,9 @@ Avoid manual `x` cancellation when automatic resumption matters. After manual ca
 
 ## Worktrees
 
-Native `isolation: worktree` starts from the repository's default branch unless project settings choose `worktree.baseRef: "head"`. Merge `config/claude-settings.fragment.json` when workers should see the current committed feature-branch state.
+Native `isolation: worktree` uses Delekit's scoped `WorktreeCreate` hook to place each checkout at `<project>/.worktrees/<name>`, starting from current committed `HEAD`. The project must list `.worktrees/` in its root `.gitignore`; otherwise creation fails before making a branch or directory.
 
-Uncommitted parent files are not inherited. Commit a checkpoint first, provide a patch explicitly, or keep the task in the current checkout. Use `.worktreeinclude` only for required ignored files and never copy secrets casually.
+Uncommitted parent files are not inherited. Commit a checkpoint first, provide a patch explicitly, or keep the task in the current checkout. Delekit preserves Claude's `.worktreeinclude` behavior for explicitly listed ignored inputs; use it narrowly and never copy secrets casually.
 
 Worktrees prevent live filesystem collisions, not merge conflicts. Give concurrent writers disjoint ownership and integrate serially.
 
@@ -105,9 +105,9 @@ the disposable worktree deliberately.
 
 ## Cleaning up worktrees
 
-Both `tandy-*-worktree` agents (native `.claude/worktrees/agent-*`) and
-`dairy --worktree` (`../.delegate-worktrees/…`) leave an isolated worktree behind
-on purpose — the work may be unmerged and yours to review. They accumulate.
+Native `tandy-*-worktree`, `dairy --worktree`, and `herd --worktree` all use
+`<project>/.worktrees/<name>`. Changed worktrees remain for deliberate review
+because their work may be unmerged. They accumulate.
 
 `prune-worktrees` removes only the finished ones, deterministically. A worktree
 is removed only when its commits are already in the main branch **and** it has no

@@ -4,6 +4,11 @@ description: Read-write delegate — sol profile (strongest tier; hard architect
 model: claude-sonnet-4-6-tandy-sol
 permissionMode: acceptEdits
 isolation: worktree
+hooks:
+  WorktreeCreate:
+    - hooks:
+        - type: command
+          command: delekit-worktree hook
 disallowedTools:
   - Agent
   - "mcp__*"

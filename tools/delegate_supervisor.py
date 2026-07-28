@@ -26,6 +26,8 @@ from pathlib import Path
 from threading import Thread
 from typing import Any
 
+from worktree_manager import WorktreeError, create_worktree as create_project_worktree
+
 KIT_ROOT = Path(__file__).resolve().parents[1]
 
 TERMINAL_STATES = {"done", "failed", "stalled", "killed"}
@@ -650,13 +652,11 @@ def create_worktree(project_root: str, task: str, dirty_policy: str) -> tuple[st
     if dirty.strip() and dirty_policy == "fail":
         raise HerdError(3, "main checkout is dirty; commit/stash or pass --dirty-policy ignore")
     branch = f"delegate/herd-{task}"
-    wt_root = os.environ.get("DELEGATE_WORKTREE_DIR") or os.path.join(os.path.dirname(project_root), ".delegate-worktrees")
-    wt_dir = os.path.join(wt_root, os.path.basename(project_root), f"herd-{task}")
-    os.makedirs(os.path.dirname(wt_dir), exist_ok=True)
-    add = subprocess.run(["git", "-C", project_root, "worktree", "add", "-b", branch, wt_dir, "HEAD"], capture_output=True, text=True)
-    if add.returncode != 0:
-        raise HerdError(4, f"failed to create worktree: {add.stderr.strip()}")
-    return wt_dir, branch
+    try:
+        wt_dir = create_project_worktree(project_root, f"herd-{task}", branch)
+    except WorktreeError as exc:
+        raise HerdError(4, f"failed to create worktree: {exc}") from exc
+    return str(wt_dir), branch
 
 
 # Keep launched helpers referenced so the intentionally-detached Popen objects

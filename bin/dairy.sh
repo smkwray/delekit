@@ -251,8 +251,7 @@ if [[ "$WORKTREE" -eq 1 ]]; then
   fi
   BASE_SHA="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
   BRANCH="delegate/${MODE}-${timestamp}"
-  WT_ROOT="${DELEGATE_WORKTREE_DIR:-$(dirname "$PROJECT_ROOT")/.delegate-worktrees}"
-  WORKTREE_DIR="$WT_ROOT/$(basename "$PROJECT_ROOT")/${MODE}-${timestamp}"
+  WORKTREE_DIR="$PROJECT_ROOT/.worktrees/${MODE}-${timestamp}"
   EXEC_ROOT="$WORKTREE_DIR"
 fi
 
@@ -309,9 +308,12 @@ TTL_DAYS="${RUNNER_LOG_TTL_DAYS:-7}"
 find "$LOG_DIR" -type f \( -name '*.stdout.log' -o -name '*.stderr.log' \) -mtime "+$TTL_DAYS" -delete 2>/dev/null || true
 
 if [[ "$WORKTREE" -eq 1 ]]; then
-  mkdir -p "$(dirname "$WORKTREE_DIR")"
-  git -C "$PROJECT_ROOT" worktree add -b "$BRANCH" "$WORKTREE_DIR" HEAD >/dev/null \
+  created_worktree="$(python3 "$KIT_ROOT/tools/worktree_manager.py" create \
+    --project-root "$PROJECT_ROOT" --name "${MODE}-${timestamp}" \
+    --branch "$BRANCH" --base HEAD)" \
     || { echo "Failed to create worktree: $WORKTREE_DIR" >&2; exit 4; }
+  WORKTREE_DIR="$created_worktree"
+  EXEC_ROOT="$WORKTREE_DIR"
 fi
 printf '%s\n' "$COMPOSED_PROMPT" > "$prompt_log"
 

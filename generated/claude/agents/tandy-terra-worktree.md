@@ -4,6 +4,11 @@ description: Read-write delegate — terra profile (default tier; general implem
 model: claude-sonnet-4-6-tandy-terra
 permissionMode: acceptEdits
 isolation: worktree
+hooks:
+  WorktreeCreate:
+    - hooks:
+        - type: command
+          command: delekit-worktree hook
 disallowedTools:
   - Agent
   - "mcp__*"

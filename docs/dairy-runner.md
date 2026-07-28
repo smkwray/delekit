@@ -85,7 +85,8 @@ macOS desktop completion notifications are off by default. Set
 - requires a Git repository;
 - fails on a dirty parent checkout by default;
 - branches from committed `HEAD`;
-- creates a distinct branch and directory;
+- creates a distinct branch at `<project>/.worktrees/<name>` and requires
+  `.worktrees/` in the project's root `.gitignore`;
 - optionally auto-commits the worker's changes;
 - leaves the worktree for deliberate review, merge, or discard.
 

@@ -9,7 +9,8 @@ git -C "$TMP/repo" init -q
 git -C "$TMP/repo" config user.name test
 git -C "$TMP/repo" config user.email test@example.invalid
 printf 'base\n' > "$TMP/repo/base.txt"
-git -C "$TMP/repo" add base.txt
+printf '.worktrees/\n' > "$TMP/repo/.gitignore"
+git -C "$TMP/repo" add base.txt .gitignore
 git -C "$TMP/repo" commit -qm base
 
 # Dry-run must not require Codex or create the state/log directory.
@@ -22,6 +23,7 @@ obj=json.load(open(sys.argv[1], encoding='utf-8'))
 assert obj['dry_run'] is True
 assert obj['worktree'] is True
 assert obj['access'] == 'workspace-write'
+assert obj['execution_root'].startswith(obj['project_root'] + '/.worktrees/'), obj
 PY
 [[ ! -e "$TMP/dry-state" ]]
 [[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
@@ -65,6 +67,7 @@ obj=json.load(open(sys.argv[1], encoding='utf-8'))
 assert obj['status'] == 'completed', obj
 assert obj['access'] == 'workspace-write', obj
 assert obj['worktree'] and os.path.isdir(obj['worktree']), obj
+assert obj['worktree'].startswith(obj['project_root'] + '/.worktrees/'), obj
 assert os.path.isfile(os.path.join(obj['worktree'], 'delegate-output.txt')), obj
 assert os.path.isfile(obj['report']), obj
 assert os.path.isfile(obj['stdout']), obj

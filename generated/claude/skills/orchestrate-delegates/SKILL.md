@@ -1,6 +1,6 @@
 ---
 name: orchestrate-delegates
-description: Coordinate delegate agents and the dairy/herd headless runner CLIs — model profiles, parallel worktrees, detached and steerable workers, computer-use access modes, course corrections, and integration. Load before any dairy or herd invocation.
+description: Coordinate delegate agents and the dairy/herd headless runner CLIs — model profiles, parallel worktrees, detached and steerable workers, computer-use access modes, course corrections, and integration. Load before any Tandy, dairy, or herd invocation.
 ---
 
 Pick a delegate by **model profile** and **capability**. The Agent tool's `model`
@@ -34,6 +34,10 @@ model ID in a prompt or a spawn parameter.
 These are capability boundaries, not personas: the task prompt alone defines the
 work. Give each worker a unique runtime name, objective, context, file ownership,
 and acceptance criteria, and keep its agent ID.
+
+If work is likely to take multiple hours, split it into checkpointed assignments.
+Keep one Tandy agent running that long only when preserving its live context
+clearly matters.
 
 A `SendMessage` to a running worker cannot approve a permission prompt. If a shell
 call hangs, `TaskStop` first, then message the same agent ID to resume with a

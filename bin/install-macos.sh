@@ -144,6 +144,7 @@ wire_file "$KIT_ROOT/bin/claudex.sh" "$BIN_DIR/claudex"
 wire_file "$KIT_ROOT/bin/dairy.sh" "$BIN_DIR/dairy"
 wire_file "$KIT_ROOT/bin/herd.sh" "$BIN_DIR/herd"
 wire_file "$KIT_ROOT/bin/prune-worktrees.sh" "$BIN_DIR/prune-worktrees"
+wire_file "$KIT_ROOT/tools/worktree_manager.py" "$BIN_DIR/delekit-worktree"
 
 DEVICE_ENV="$DEVICE_DIR/device.env"
 # Carry over a device.env from the pre-rename location so a switchover keeps the
@@ -175,6 +176,6 @@ Next:
    this run. The delegate agents live in the gateway profile only; pass
    --also-default-profile to also expose them to a plain \`claude\` session.
 
-Optional project setting: merge config/claude-settings.fragment.json to base
-native worktrees on your current committed HEAD.
+Native Tandy worktrees use your current committed HEAD and are placed under
+the project's ignored .worktrees/ directory.
 EOF
