@@ -12,6 +12,7 @@ Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 |---|---|
 | A delegate ran on the wrong model, silently | [A misspelled spawn parameter silently downgrades a delegate](#a-misspelled-spawn-parameter-silently-downgrades-a-delegate-all) · [A delegate's own reply does not prove which model ran](#a-delegates-own-reply-does-not-prove-which-model-ran-all) |
 | A delegate ran at the wrong reasoning effort | [`effort: xhigh` on a subagent silently becomes `high`](#effort-xhigh-on-a-subagent-silently-becomes-high-all) |
+| A setting you disabled globally is back in `ccg` | [The gateway profile does not inherit `~/.claude/settings.json`](#the-gateway-profile-does-not-inherit-claudesettingsjson-all) |
 | Sessions broke after picking a model in-session | [A `/model` pick inside a gateway session breaks every other session](#a-model-pick-inside-a-gateway-session-breaks-every-other-session-all) |
 | Context limit looks wrong (200k, or compacts early) | [Every model shows a 200k context limit](#every-model-shows-a-200k-context-limit-through-the-gateway-all) · [A `[1m]` parent that compacts at 650k](#a-1m-parent-that-compacts-at-650k-or-any-sub-1m-number-all) |
 | Tandy dropped from 272k to 200k | [`/login` inside a `ccg` session silently kills the 272k Tandy window](#login-inside-a-ccg-session-silently-kills-the-272k-tandy-window-all) |
@@ -357,6 +358,37 @@ The alias must begin with `claude-` or Claude Code's gateway discovery filters i
 out of the catalog. A bare `delegate-<profile>` is **not** a valid name for
 anything. The Agent tool's `model` parameter rejects gateway aliases, which is why
 the profile has to be baked into the agent name.
+
+---
+
+## The gateway profile does not inherit `~/.claude/settings.json` **[all]**
+
+**Symptom.** A setting turned off once in `~/.claude/settings.json` is still
+active in every `ccg` session. Hit 2026-07-30 with commit attribution: the
+`Co-Authored-By:` trailer was disabled globally, yet gateway sessions kept adding
+it to commits.
+
+**Cause.** `clientdata-272k` mode points `CLAUDE_CONFIG_DIR` at
+`<device>/delekit/claude-profile` (`bin/claudex.sh`, `bin/claudex.ps1`). Settings
+are read from *that* directory, and it is a **separate profile, not an overlay** —
+the installer creates it empty, so it inherits nothing from `~/.claude`. Anything
+configured in the normal profile has to be repeated here. The isolation is
+deliberate (it is what keeps first-party credentials out; see the `/login` entry),
+so this is a consequence of the design rather than a bug in it.
+
+**Fix.** `tools/seed_claude_context_cache.py` writes
+`attribution: {commit: "", pr: ""}` into the profile on every launch, and drops
+the deprecated `includeCoAuthoredBy` key, which conflicts with it. An explicit
+non-empty string is left alone, so a deliberate choice still wins.
+
+For any *other* setting you want in gateway sessions, add it to the profile's own
+`settings.json`. Only correctness-critical settings belong in the seeder;
+preferences (theme, voice, plugins) are reasonable to diverge.
+
+**Trap.** `~/.claude/settings.json` is still the file that matters for `ccc` and a
+bare `claude`. The two profiles drift independently, and neither reports the
+other's values, so "I already turned that off" is not evidence for the profile you
+are actually running in. Check with `echo $CLAUDE_CONFIG_DIR`.
 
 ---
 

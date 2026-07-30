@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Seed Claude Code's isolated gateway profile with Tandy's 272k window.
+"""Enforce the isolated gateway profile's invariants on every launch.
 
-The seed only holds while the profile has **no first-party credential**. Claude
-Code treats these launches as `firstParty` (its internal "gateway" mode is gated
-on CLAUDE_CODE_USE_GATEWAY, which the launchers deliberately do not set), so a
-saved login here activates the first-party bootstrap writer, which overwrites
-autoCompactWindowsCache with the server's value on every model switch. Gateway
-inference never needs that credential - it authenticates with
-ANTHROPIC_AUTH_TOKEN - so we quarantine it and keep the profile identity-free.
-That is why `/login` inside a gateway session silently drops Tandy to 200k.
+Tandy's 272k window. The seed only holds while the profile has **no
+first-party credential**. Claude Code treats these launches as `firstParty` (its
+internal "gateway" mode is gated on CLAUDE_CODE_USE_GATEWAY, which the launchers
+deliberately do not set), so a saved login here activates the first-party
+bootstrap writer, which overwrites autoCompactWindowsCache with the server's
+value on every model switch. Gateway inference never needs that credential - it
+authenticates with ANTHROPIC_AUTH_TOKEN - so we quarantine it and keep the
+profile identity-free. That is why `/login` inside a gateway session silently
+drops Tandy to 200k.
+
+Commit attribution. Settings are per-profile and the installer creates this one
+empty, so disabling the `Co-Authored-By:` trailer in ~/.claude/settings.json has
+no effect on gateway sessions - the trailer silently returns for every one.
 """
 
 from __future__ import annotations
@@ -27,6 +32,13 @@ FAMILY = "claude-sonnet-4-6"
 # file plus the account keys it caches in .claude.json.
 CREDENTIAL_FILE = ".credentials.json"
 IDENTITY_KEYS = ("oauthAccount", "userID")
+# Commit/PR attribution is per-profile, and this profile is created empty by the
+# installer -- so a `Co-Authored-By:` trailer the user already disabled in
+# ~/.claude/settings.json comes back for every gateway session. Empty strings
+# suppress it; the deprecated `includeCoAuthoredBy` boolean conflicts with this
+# key, so it is removed rather than left to fight with it.
+SETTINGS_FILE = "settings.json"
+ATTRIBUTION = {"commit": "", "pr": ""}
 
 
 def patch_client_data(value: Any) -> dict[str, Any]:
@@ -80,19 +92,61 @@ def seed(config_dir: Path) -> bool:
     if patched == document:
         return False
 
-    fd, temporary_name = tempfile.mkstemp(prefix=".claude.json.", dir=config_dir)
+    write_json(state_path, patched, mode)
+    return True
+
+
+def seed_attribution(config_dir: Path) -> bool:
+    """Disable commit/PR attribution in the profile; return whether it changed.
+
+    Only writes the key when it is absent or wrong, so a deliberate override is
+    the one thing this cannot silently undo -- an explicit non-empty string is
+    left alone.
+    """
+    settings_path = config_dir / SETTINGS_FILE
+    if settings_path.exists():
+        try:
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Cannot read {settings_path}: {exc}") from exc
+        if not isinstance(document, dict):
+            raise RuntimeError(f"{settings_path}: expected a top-level JSON object")
+        mode = settings_path.stat().st_mode & 0o777
+    else:
+        document = {}
+        mode = 0o600
+
+    patched = copy.deepcopy(document)
+    patched.pop("includeCoAuthoredBy", None)  # deprecated; conflicts with attribution
+    attribution = patched.get("attribution")
+    if not isinstance(attribution, dict):
+        attribution = {}
+    else:
+        attribution = dict(attribution)
+    for key, value in ATTRIBUTION.items():
+        attribution.setdefault(key, value)
+    patched["attribution"] = attribution
+    if patched == document:
+        return False
+
+    write_json(settings_path, patched, mode)
+    return True
+
+
+def write_json(path: Path, payload: dict[str, Any], mode: int) -> None:
+    """Replace path atomically, so a crash cannot leave a half-written file."""
+    fd, temporary_name = tempfile.mkstemp(prefix=f"{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(patched, handle, indent=2, sort_keys=True)
+            json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary_path, mode)
-        os.replace(temporary_path, state_path)
+        os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
-    return True
 
 
 def quarantine_credential(config_dir: Path) -> Path | None:
@@ -118,6 +172,7 @@ def main() -> None:
     try:
         moved = quarantine_credential(config_dir)
         seed(config_dir)
+        seed_attribution(config_dir)
     except (OSError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
     if moved is not None:

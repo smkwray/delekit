@@ -10,10 +10,12 @@ from pathlib import Path
 from tools.seed_claude_context_cache import (
     CREDENTIAL_FILE,
     FAMILY,
+    SETTINGS_FILE,
     WINDOW,
     patch_document,
     quarantine_credential,
     seed,
+    seed_attribution,
 )
 
 
@@ -93,6 +95,59 @@ class SeedContextCacheTest(unittest.TestCase):
             self.assertNotEqual(second, moved)
             self.assertIn("a", moved.read_text(encoding="utf-8"))
             self.assertIn("b", second.read_text(encoding="utf-8"))
+
+    def test_attribution_is_disabled_in_a_fresh_profile(self) -> None:
+        # The installer creates this profile empty, so a trailer disabled in
+        # ~/.claude/settings.json returns for every gateway session without this.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+
+            self.assertTrue(seed_attribution(config_dir))
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["attribution"], {"commit": "", "pr": ""})
+            # Idempotent: a second launch must not rewrite the file.
+            first_mtime = settings_path.stat().st_mtime_ns
+            self.assertFalse(seed_attribution(config_dir))
+            self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
+
+    def test_attribution_preserves_other_settings_and_drops_the_deprecated_key(self) -> None:
+        # includeCoAuthoredBy conflicts with attribution, so leaving both in
+        # place makes the effective behaviour depend on precedence we do not own.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+            settings_path.write_text(
+                json.dumps({"theme": "dark", "includeCoAuthoredBy": True}), encoding="utf-8"
+            )
+
+            self.assertTrue(seed_attribution(config_dir))
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["theme"], "dark")
+            self.assertNotIn("includeCoAuthoredBy", document)
+            self.assertEqual(document["attribution"], {"commit": "", "pr": ""})
+
+    def test_attribution_does_not_override_a_deliberate_choice(self) -> None:
+        # Suppression is the default, not a policy: an explicit string stands.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+            settings_path.write_text(
+                json.dumps({"attribution": {"commit": "Made by me"}}), encoding="utf-8"
+            )
+
+            seed_attribution(config_dir)
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["attribution"]["commit"], "Made by me")
+            self.assertEqual(document["attribution"]["pr"], "")
+
+    def test_attribution_refuses_malformed_json(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings_path = Path(raw) / SETTINGS_FILE
+            settings_path.write_text("not json", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "Cannot read"):
+                seed_attribution(Path(raw))
+            self.assertEqual(settings_path.read_text(encoding="utf-8"), "not json")
 
     def test_seed_refuses_malformed_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
