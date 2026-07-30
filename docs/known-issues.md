@@ -11,6 +11,7 @@ Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 | Symptom | Entry |
 |---|---|
 | A delegate ran on the wrong model, silently | [A misspelled spawn parameter silently downgrades a delegate](#a-misspelled-spawn-parameter-silently-downgrades-a-delegate-all) · [A delegate's own reply does not prove which model ran](#a-delegates-own-reply-does-not-prove-which-model-ran-all) |
+| A delegate ran at the wrong reasoning effort | [`effort: xhigh` on a subagent silently becomes `high`](#effort-xhigh-on-a-subagent-silently-becomes-high-all) |
 | Sessions broke after picking a model in-session | [A `/model` pick inside a gateway session breaks every other session](#a-model-pick-inside-a-gateway-session-breaks-every-other-session-all) |
 | Context limit looks wrong (200k, or compacts early) | [Every model shows a 200k context limit](#every-model-shows-a-200k-context-limit-through-the-gateway-all) · [A `[1m]` parent that compacts at 650k](#a-1m-parent-that-compacts-at-650k-or-any-sub-1m-number-all) |
 | Tandy dropped from 272k to 200k | [`/login` inside a `ccg` session silently kills the 272k Tandy window](#login-inside-a-ccg-session-silently-kills-the-272k-tandy-window-all) |
@@ -356,6 +357,56 @@ The alias must begin with `claude-` or Claude Code's gateway discovery filters i
 out of the catalog. A bare `delegate-<profile>` is **not** a valid name for
 anything. The Agent tool's `model` parameter rejects gateway aliases, which is why
 the profile has to be baked into the agent name.
+
+---
+
+## `effort: xhigh` on a subagent silently becomes `high` **[all]**
+
+**Symptom.** An agent file carries `effort: xhigh`. Nothing errors, the spawn
+works, and the file keeps reading `xhigh` forever — but the delegate reasons at
+`high`. Hit 2026-07-30 while evaluating a move to `xhigh` for the luna and terra
+profiles.
+
+**Cause.** Claude Code clamps `xhigh` to `high` **on the subagent path**. This is
+not a frontmatter parsing fault and not the gateway:
+
+- The parent honours it. `claude -p --effort xhigh` puts `"effort": "xhigh"` on
+  the wire, and the CLI validates the vocabulary (`--effort bogus` warns *"Valid
+  values: low, medium, high, xhigh, max"*).
+- The clamp follows the *path*, not the source. With the parent at `xhigh` and a
+  delegate declaring **no** effort at all, the parent request carries `xhigh`
+  while the delegate request in the same session carries `high`.
+- It is specific to this one value. Measured with a logging pass-through in front
+  of the proxy, parent pinned at `medium`:
+
+  ```text
+  frontmatter          delegate request
+  (absent)      ->     medium     inherits the parent
+  low           ->     low
+  high          ->     high
+  xhigh         ->     high       <- clamped
+  max           ->     max
+  ```
+
+**Fix.** Do not write `xhigh` in an agent file. `tools/render_config.py` rejects
+it in `DELEGATE_EFFORT_*` so this fails at render time instead of silently
+downgrading. Use `high`, or `max` when a profile genuinely warrants it.
+
+**Where effort actually rides.** `output_config.effort`, not a top-level field —
+grepping a request body for `"effort"` at the top level finds nothing and looks
+like effort was dropped entirely. `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1` (the
+launcher default) is what gets it sent for custom gateway aliases at all.
+
+**Re-test after a Claude Code upgrade.** If the clamp is a bug rather than a
+deliberate cap, `xhigh` becomes reachable and is worth revisiting for the luna
+profile specifically. The check is a pass-through logger reading
+`output_config.effort` on the delegate's request; the delegate's own answer
+cannot tell you, exactly as with the model identity below.
+
+**Scope.** This is the `tandy-*` path only. `dairy` and `herd` shell out to the
+backend CLI with `-c model_reasoning_effort=<level>`, where `xhigh` is accepted
+normally — so the same word means two different things on the two paths, which is
+why `DELEGATE_EFFORT_*` is restricted to values that are safe for both.
 
 ---
 

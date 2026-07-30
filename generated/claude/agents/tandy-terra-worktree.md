@@ -1,7 +1,8 @@
 ---
 name: tandy-terra-worktree
-description: Read-write delegate — terra profile (default tier; general implementation and analysis); isolated in its own Git worktree for parallel writers.
+description: Read-write delegate — terra profile (default tier; implementation, judgment calls, exhaustive long-context audits); isolated in its own Git worktree for parallel writers.
 model: claude-sonnet-4-6-tandy-terra
+effort: high
 permissionMode: acceptEdits
 isolation: worktree
 hooks:

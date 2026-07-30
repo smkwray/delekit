@@ -62,7 +62,20 @@ The per-invocation choice persists when that worker receives follow-up messages 
 
 ## Effort
 
-Agent files deliberately omit `effort:`. They inherit the session effort unless the orchestrator chooses an effort for the invocation, avoiding a stale effort policy when profile mappings change.
+Agent files carry `effort:` from `DELEGATE_EFFORT_<PROFILE>` in
+`config/models.env` — the same keys the headless runners use, so `tandy`,
+`dairy`, and `herd` cannot disagree about what a profile means. Change the effort
+where you change the model, then rerender.
+
+They previously omitted it, on the theory that a delegate would inherit the
+session effort unless the orchestrator chose one per invocation. The Agent tool
+has no `effort` parameter, so that second half was never true: every profile
+simply ran at whatever the session was set to, and the profile choice moved only
+the model.
+
+`xhigh` is rejected at render time. Claude Code clamps it to `high` for
+subagents, so an agent file naming it would report an effort it never sends — see
+[known-issues.md](known-issues.md). Effort travels as `output_config.effort`.
 
 The launcher defaults `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1`, which tells current Claude Code to send effort for custom gateway model IDs while still excluding known incompatible Claude models. Override it in the local `device.env` only after testing a provider that rejects the parameter.
 

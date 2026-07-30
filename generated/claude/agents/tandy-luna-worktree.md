@@ -1,7 +1,8 @@
 ---
 name: tandy-luna-worktree
-description: Read-write delegate — luna profile (fast tier; mechanical, high-volume, low-ambiguity work); isolated in its own Git worktree for parallel writers.
+description: Read-write delegate — luna profile (fast tier; bounded checkable work — locate, extract, compare, summarize); isolated in its own Git worktree for parallel writers.
 model: claude-sonnet-4-6-tandy-luna
+effort: high
 permissionMode: acceptEdits
 isolation: worktree
 hooks:

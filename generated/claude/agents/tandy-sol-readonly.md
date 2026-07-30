@@ -2,6 +2,7 @@
 name: tandy-sol-readonly
 description: Read-only delegate — sol profile (strongest tier; hard architecture, debugging, tricky reasoning); investigation and analysis, makes no changes.
 model: claude-sonnet-4-6-tandy-sol
+effort: high
 permissionMode: plan
 tools:
   - Read

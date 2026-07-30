@@ -1,7 +1,8 @@
 ---
 name: tandy-terra-readonly
-description: Read-only delegate — terra profile (default tier; general implementation and analysis); investigation and analysis, makes no changes.
+description: Read-only delegate — terra profile (default tier; implementation, judgment calls, exhaustive long-context audits); investigation and analysis, makes no changes.
 model: claude-sonnet-4-6-tandy-terra
+effort: high
 permissionMode: plan
 tools:
   - Read

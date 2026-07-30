@@ -29,8 +29,15 @@ REQUIRED = [
     "DELEGATE_HINT_TERRA",
     "DELEGATE_HINT_LUNA",
     "DELEGATE_HINT_SOL",
+    "DELEGATE_EFFORT_TERRA",
+    "DELEGATE_EFFORT_LUNA",
+    "DELEGATE_EFFORT_SOL",
     "AGENT_PREFIX",
 ]
+
+# Claude Code clamps `xhigh` to `high` on the subagent path, so a rendered agent
+# would claim an effort it never sends. Fail at render time instead.
+EFFORTS = ("low", "medium", "high", "max")
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -55,6 +62,14 @@ def parse_env(path: Path) -> dict[str, str]:
     aliases = [values[f"DELEGATE_ALIAS_{role}"] for role in ROLES]
     if len(set(aliases)) != len(aliases):
         raise ValueError("Delegate aliases must be unique")
+    for role in ROLES:
+        effort = values[f"DELEGATE_EFFORT_{role}"]
+        if effort not in EFFORTS:
+            raise ValueError(
+                f"DELEGATE_EFFORT_{role}={effort!r} is not one of {', '.join(EFFORTS)}"
+                + (" (Claude Code clamps xhigh to high for subagents)"
+                   if effort == "xhigh" else "")
+            )
     return values
 
 
@@ -93,6 +108,7 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
             local["AGENT_MODEL"] = alias
             local["AGENT_PROFILE"] = profile
             local["PROFILE_HINT"] = values[f"DELEGATE_HINT_{role}"]
+            local["PROFILE_EFFORT"] = values[f"DELEGATE_EFFORT_{role}"]
             destination = GENERATED_AGENT_DIR / f"{agent_name}.md"
             outputs[destination] = render_template(template.read_text(encoding="utf-8"), local)
 

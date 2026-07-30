@@ -2,6 +2,7 @@
 name: tandy-sol
 description: Read-write delegate — sol profile (strongest tier; hard architecture, debugging, tricky reasoning); works in the current checkout.
 model: claude-sonnet-4-6-tandy-sol
+effort: high
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

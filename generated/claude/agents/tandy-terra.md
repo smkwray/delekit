@@ -1,7 +1,8 @@
 ---
 name: tandy-terra
-description: Read-write delegate — terra profile (default tier; general implementation and analysis); works in the current checkout.
+description: Read-write delegate — terra profile (default tier; implementation, judgment calls, exhaustive long-context audits); works in the current checkout.
 model: claude-sonnet-4-6-tandy-terra
+effort: high
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

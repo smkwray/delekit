@@ -85,6 +85,26 @@ class RenderConfigTest(unittest.TestCase):
             text = (ROOT / relative).read_text(encoding='utf-8')
             self.assertEqual(text.count('force-mapping: true'), len(ROLES), relative)
 
+    def test_each_agent_declares_its_profile_effort(self) -> None:
+        # Without frontmatter effort a subagent inherits the session effort, so
+        # every profile silently runs at one level and the profile choice moves
+        # only the model. One source with the runners: DELEGATE_EFFORT_*.
+        prefix = self.env['AGENT_PREFIX']
+        for role in ROLES:
+            effort = self.env[f'DELEGATE_EFFORT_{role}']
+            for suffix in ('', '-worktree', '-readonly'):
+                name = f'{prefix}-{role.lower()}{suffix}'
+                text = (AGENTS / f'{name}.md').read_text(encoding='utf-8')
+                self.assertIn(f'effort: {effort}\n', text, name)
+
+    def test_no_profile_requests_an_effort_subagents_cannot_receive(self) -> None:
+        # Claude Code clamps `xhigh` to `high` on the subagent path, so an agent
+        # file naming it reports an effort it never sends. Verified on the wire;
+        # see docs/known-issues.md. Render must fail rather than mislead.
+        for role in ROLES:
+            self.assertIn(self.env[f'DELEGATE_EFFORT_{role}'],
+                          ('low', 'medium', 'high', 'max'), role)
+
     def test_agent_bodies_are_lean(self) -> None:
         # These bodies are re-sent on every delegate invocation.
         for path in AGENTS.glob('*.md'):
@@ -184,6 +204,9 @@ class RenderConfigTest(unittest.TestCase):
             self.assertIn(tag, text)
         for topic in ('DELEGATE_PARENT_MODEL', 'subshell', 'placeholder'):
             self.assertIn(topic, text)
+        # The xhigh clamp is invisible without a wire capture, so the record of
+        # how it was measured is the only thing that makes it re-checkable.
+        self.assertIn('output_config.effort', text)
 
     def test_ccg_snippets_do_not_leak_gateway_env(self) -> None:
         # ccg must not persist ANTHROPIC_BASE_URL into the calling shell, or a
