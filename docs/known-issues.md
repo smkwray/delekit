@@ -15,7 +15,7 @@ Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 | A setting you disabled globally is back in `ccg` | [The gateway profile does not inherit `~/.claude/settings.json`](#the-gateway-profile-does-not-inherit-claudesettingsjson-all) |
 | Sessions broke after picking a model in-session | [A `/model` pick inside a gateway session breaks every other session](#a-model-pick-inside-a-gateway-session-breaks-every-other-session-all) |
 | Context limit looks wrong (200k, or compacts early) | [Every model shows a 200k context limit](#every-model-shows-a-200k-context-limit-through-the-gateway-all) · [A `[1m]` parent that compacts at 650k](#a-1m-parent-that-compacts-at-650k-or-any-sub-1m-number-all) |
-| `/model` has no 1M row for a gateway model | [The `/model` picker offers no 1M row](#the-model-picker-offers-no-1m-row-for-a-gateway-model-all) |
+| Fable has no 1M row in `/model` | [Fable has no 1M row in the picker — type it instead](#fable-has-no-1m-row-in-the-model-picker--type-it-instead-all) |
 | `502 unknown provider for model fable-5` | [Type the ID exactly](#every-model-shows-a-200k-context-limit-through-the-gateway-all) |
 | Tandy dropped from 272k to 200k | [`/login` inside a `ccg` session silently kills the 272k Tandy window](#login-inside-a-ccg-session-silently-kills-the-272k-tandy-window-all) |
 | 502s through the gateway | [A brand-new Anthropic model 502s](#a-brand-new-anthropic-model-502s-through-the-gateway-all) · [Subagents that fall back to Haiku 502](#subagents-that-fall-back-to-haiku-502-through-the-gateway-all) |
@@ -97,39 +97,54 @@ model.
 
 ---
 
-## The `/model` picker offers no 1M row for a gateway model **[all]**
+## Fable has no 1M row in the `/model` picker — type it instead **[all]**
 
-**Symptom.** `/model` lists `Claude Fable 5 — From gateway` with no "(1M
-context)" row beside it, while Opus and Sonnet 5 both get one. Picking the plain
-row silently gives a 200k session, so the only way to 1M is to type the suffixed
-ID by hand. Hit 2026-08-01.
+**Symptom.** `/model` lists one `Claude Fable 5 — From gateway` row and no "(1M
+context)" row beside it, while Opus and Sonnet 5 each get both. Picking the
+Fable row gives a 200k session. Hit 2026-08-01.
 
-**Cause.** Two independent lists. The Opus/Sonnet 1M rows are **baked into the
-client** and only render for a first-party base URL; behind a gateway, the picker
-is built purely from `/v1/models`, one row per ID, described "From gateway". The
-client adds "(1M context)" only to an ID that *literally ends in* `[1m]`. So the
-row exists only if the catalog advertises the suffixed ID — the proxy never did.
+**Workaround — the only one that works.** Type the model instead of picking it:
+`/model fable[1m]` (or `claude-fable-5[1m]`). Better, set it once as
+`DELEGATE_PARENT_MODEL` in the local `device.env` so every `ccg` launch starts
+there and the picker never comes up.
 
-**Fix.** The bridge patch clones `claude-fable-5` to `claude-fable-5[1m]`, so
-both IDs are served and the picker renders the 1M row. Rebuild with
-`bin/build-cliproxy-opus5.sh`.
+**Cause — two client-side rules, and the second is unfixable from the proxy.**
+Behind a gateway the picker is built purely from `/v1/models` (the built-in
+Opus/Sonnet 1M rows render only for a first-party base URL), and "(1M context)"
+is added only to an ID *literally ending in* `[1m]`. The bridge patch therefore
+clones `claude-fable-5` to `claude-fable-5[1m]` so both IDs are advertised —
+necessary, but **not sufficient**:
 
-**Why a clone and not an alias.** `oauth-model-alias` **renames** a model rather
-than adding one: aliasing `claude-fable-5` → `claude-fable-5[1m]` removes the
-plain ID from the catalog. That is the one ID that must keep working, because
-Claude Code strips `[1m]` before the wire — so the alias breaks exactly the
-request it was meant to enable, and every Fable call 502s. `force-mapping: false`
-does not change this. Only an additive catalog entry works.
+Claude Code applies a **Fable-specific dedup rule** that collapses any two
+`claude-fable-5` IDs into a single row, *ignoring* the `[1m]` suffix, and keeps
+whichever it encounters first. Opus and Sonnet use the general comparator, which
+respects the suffix — which is exactly why they get two rows and Fable gets one.
+The rule matches every real Fable spelling (dated, `-v`, `[1m]`, `[2m]`,
+`anthropic.`-prefixed), so no alternate ID escapes it while still *being* Fable.
 
-**Verifying.** The suffixed ID is for the *picker and the client*, not for curl:
-calling `claude-fable-5[1m]` directly fails with `auth_unavailable` (no upstream
-model by that name) and, worse, puts that entry into the cooldown described
-below, so it disappears from the next `/v1/models`. Restart the proxy to
-republish it. Verify through Claude Code instead —
-`claude --model 'claude-fable-5[1m]' -p ...` — which strips the suffix and
-succeeds. The picker reads a **cached** catalog
-(`<profile>/cache/gateway-models.json`), so the new row appears on the next
-launch after a discovery refresh, not instantly.
+Ordering cannot rescue it either: Claude Code **reorders the catalog** when it
+writes `<profile>/cache/gateway-models.json`, so the proxy's order does not
+survive (verified — the proxy emits `[1m]` first and the cache still records
+plain first). Under any string ordering the plain ID sorts before the suffixed
+one anyway, since it is a prefix. Nor can the plain ID simply be dropped: the
+client strips `[1m]` before the wire, so plain is the ID actually sent, and
+`oauth-excluded-models` removes routing along with the listing.
+
+**What the clone still buys.** `claude-fable-5[1m]` is a valid, routable
+catalog entry, so typing it (or `fable[1m]`) resolves and gives a real 1M
+session. Only the *picker row* is lost. Keep the clone; it costs nothing and is
+what makes the typed ID work.
+
+**Verifying.** The suffixed ID is for the *client*, not for curl: calling
+`claude-fable-5[1m]` directly fails with `auth_unavailable` (no upstream model
+by that name) and puts that entry into the cooldown described below, so it
+disappears from the next `/v1/models` until the proxy restarts. Verify through
+Claude Code instead — `claude --model 'claude-fable-5[1m]' -p ...` — then
+confirm with `/context` that it reports `/1m tokens`.
+
+**Re-test after a Claude Code upgrade.** If the Fable dedup special-case is
+dropped or taught about `[1m]`, the second row appears on its own with no proxy
+change — the catalog entry is already there.
 
 ---
 
@@ -225,9 +240,11 @@ it**, once a stock CLIProxyAPI release lists the model, reinstall a stock binary
 and delete the patch + both scripts.
 
 The same mechanism serves a second purpose: cloning a served model to its
-`[1m]`-suffixed ID so the `/model` picker renders a 1M row for it (see
-[the picker entry](#the-model-picker-offers-no-1m-row-for-a-gateway-model-all)).
-That clone is additive and must stay additive — the plain ID is what actually
+`[1m]`-suffixed ID, so that ID is routable and `/model claude-fable-5[1m]`
+resolves. It does **not** get Fable a 1M row in the picker — a client-side
+dedup rule collapses that row regardless; see
+[the picker entry](#fable-has-no-1m-row-in-the-model-picker--type-it-instead-all).
+The clone is additive and must stay additive — the plain ID is what actually
 goes on the wire.
 
 **When editing the patch, fix the hunk header.** `@@ -0,0 +1,N @@` must equal the
