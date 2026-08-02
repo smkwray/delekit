@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..1f81d03
 --- /dev/null
 +++ b/internal/registry/bridge_models.go
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,60 @@
 +package registry
 +
 +// Bridge models are entries that the upstream Claude API already serves but the
@@ -28,6 +28,13 @@ index 0000000..1f81d03
 +	// Claude Opus 5 (1M context). Released 2026-07-24; not yet in the CLIProxyAPI
 +	// catalog. Clones Opus 4.8 so it inherits the 1M window and thinking budget.
 +	data.Claude = ensureClonedModel(data.Claude, "claude-opus-4-8", "claude-opus-5", "Claude Opus 5")
++	// Fable 5 is in the catalog under its plain id, so it routes fine — but the
++	// /model picker only renders a "(1M context)" row for a gateway id that
++	// literally ends in [1m]. Claude Code strips that suffix before the wire, so
++	// the suffixed id must exist ALONGSIDE the plain one rather than replace it:
++	// an `oauth-model-alias` entry renames instead of adding and breaks the id the
++	// client actually sends. A clone is additive, so both ids serve.
++	data.Claude = ensureClonedModel(data.Claude, "claude-fable-5", "claude-fable-5[1m]", "Claude Fable 5 (1M context)")
 +}
 +
 +// ensureClonedModel returns models with a shallow clone of cloneFromID appended
