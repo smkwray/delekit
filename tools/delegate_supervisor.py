@@ -378,13 +378,63 @@ def has_question(tdir: Path) -> bool:
         return False
 
 
+def _child_popen_kwargs(*, new_process_group: bool = False) -> dict[str, Any]:
+    """Popen options for a child we may later signal as a group.
+
+    `new_process_group` must be honoured on BOTH platforms. stop_pid signals the
+    whole group (`killpg` on POSIX, `CTRL_BREAK_EVENT` on Windows), so a child
+    left in its parent's group takes the parent down with it: killing one task
+    would SIGINT the helper, and under a test runner it kills the runner itself.
+    A Windows-only implementation looks correct because the Windows flag is the
+    visible one, while the POSIX no-op fails silently.
+    """
+    if os.name != "nt":
+        return {"start_new_session": True} if new_process_group else {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    flags = subprocess.CREATE_NO_WINDOW
+    if new_process_group:
+        flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+    return {"creationflags": flags, "startupinfo": startupinfo}
+
+
+def backend_pid(tdir: Path) -> int | None:
+    child = read_json(tdir / "child.json") or {}
+    pid = child.get("backend_pid")
+    return pid if isinstance(pid, int) else None
+
+
+def helper_pid(tdir: Path, meta: dict[str, Any]) -> int | None:
+    helper = read_json(tdir / "helper.json") or {}
+    pid = helper.get("helper_pid")
+    if isinstance(pid, int):
+        return pid
+    legacy = meta.get("pid")
+    return legacy if isinstance(legacy, int) else None
+
+
+def task_process_alive(tdir: Path, meta: dict[str, Any]) -> bool:
+    return pid_alive(helper_pid(tdir, meta)) or pid_alive(backend_pid(tdir))
+
+
+def stop_task_processes(tdir: Path, meta: dict[str, Any]) -> None:
+    # Stop the backend as well as the helper. A crashed helper must not leave a
+    # live provider child behind or make a concurrent resume look safe.
+    for pid in (backend_pid(tdir), helper_pid(tdir, meta)):
+        stop_pid(pid)
+
+
 def status_payload(tdir: Path, meta: dict[str, Any]) -> dict[str, Any]:
     mtime = output_mtime(tdir)
+    child_pid = backend_pid(tdir)
+    supervisor_pid = helper_pid(tdir, meta)
     payload = {
         "task": tdir.name, "state": meta.get("state", "working"),
         "backend": meta.get("backend"), "model": meta.get("model"), "access": meta.get("access"),
-        "repo": meta.get("repo"), "owner": meta.get("owner"), "pid": meta.get("pid"),
-        "pid_alive": pid_alive(meta.get("pid")), "session_id": meta.get("session_id"),
+        "repo": meta.get("repo"), "owner": meta.get("owner"), "pid": supervisor_pid,
+        "pid_alive": pid_alive(supervisor_pid), "session_id": meta.get("session_id"),
+        "backend_pid": child_pid, "backend_pid_alive": pid_alive(child_pid),
         "created_utc": meta.get("created_utc"),
         "last_output_age_s": None if mtime is None else max(0, int(now() - mtime)),
     }
@@ -414,15 +464,12 @@ def reconcile(tdir: Path, enforce: bool = True) -> dict[str, Any] | None:
     if (tdir / ".done").exists():
         return status_payload(tdir, meta)
 
-    pid = meta.get("pid")
-    if not pid_alive(pid):
-        mark_terminal(tdir, meta, "failed", "process-exited-without-marker")
-        return status_payload(tdir, meta)
-
+    pid = helper_pid(tdir, meta)
+    child_pid = backend_pid(tdir)
     deadline = meta.get("deadline_utc")
     if isinstance(deadline, (int, float)) and now() > deadline:
         if enforce:
-            stop_pid(pid)
+            stop_task_processes(tdir, meta)
         mark_terminal(tdir, meta, "failed", "deadline")
         return status_payload(tdir, meta)
 
@@ -430,8 +477,21 @@ def reconcile(tdir: Path, enforce: bool = True) -> dict[str, Any] | None:
     mtime = output_mtime(tdir)
     if mtime is not None and (now() - mtime) > stall_after:
         if enforce:
-            stop_pid(pid)
+            stop_task_processes(tdir, meta)
         mark_terminal(tdir, meta, "stalled", "no-output")
+        return status_payload(tdir, meta)
+
+    if not pid_alive(pid) and pid_alive(child_pid):
+        # The provider child can outlive a failed helper on Windows. Keep the
+        # task non-resumable until that exact child exits; result --wait will
+        # then wake and report the failed supervisor instead of racing a second
+        # turn into the same checkout/session.
+        live = dict(meta)
+        live["state"] = "working"
+        live["stall_reason"] = "supervisor-exited-backend-still-running"
+        return status_payload(tdir, live)
+    if not pid_alive(pid):
+        mark_terminal(tdir, meta, "failed", "process-exited-without-marker")
         return status_payload(tdir, meta)
 
     if has_question(tdir):
@@ -478,8 +538,14 @@ def run_turn(task: str, mode: str) -> int:
     env = dict(os.environ, CI="1", GIT_TERMINAL_PROMPT="0", GIT_PAGER="cat", PAGER="cat", NO_COLOR="1")
     env.pop("CLAUDECODE", None)
     stderr_f = open(tdir / "stderr.log", "ab")
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr_f,
-                            cwd=cwd, env=env, text=True, bufsize=1)
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr_f,
+        cwd=cwd, env=env, text=True, bufsize=1,
+        **_child_popen_kwargs(new_process_group=True),
+    )
+    atomic_write_json(tdir / "child.json", {
+        "helper_pid": os.getpid(), "backend_pid": proc.pid, "started_utc": now(),
+    })
     try:
         proc.stdin.write(stdin_text)
         proc.stdin.close()
@@ -669,11 +735,11 @@ def launch_helper(task: str, mode: str) -> int:
     cmd = [sys.executable, os.path.abspath(__file__), "__run_turn", "--task", task, "--mode", mode]
     kwargs: dict[str, Any] = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, env=env)
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008  # DETACHED_PROCESS
-    else:
-        kwargs["start_new_session"] = True
+    kwargs.update(_child_popen_kwargs(new_process_group=True))
     proc = subprocess.Popen(cmd, **kwargs)
+    atomic_write_json(task_dir(task) / "helper.json", {
+        "helper_pid": proc.pid, "started_utc": now(), "mode": mode,
+    })
     _LAUNCHED.append(proc)
     return proc.pid
 
@@ -737,10 +803,9 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     write_status(tdir, meta)
 
     pid = launch_helper(task, "spawn")
-    meta["pid"] = pid
-    atomic_write_json(tdir / "meta.json", meta)
-    write_status(tdir, meta)
-    emit(args, status_payload(tdir, meta), f"{task} working pid={pid} backend={args.backend} repo={project_root}")
+    current = read_json(tdir / "meta.json") or meta
+    write_status(tdir, current)
+    emit(args, status_payload(tdir, current), f"{task} working pid={pid} backend={args.backend} repo={project_root}")
     return 0
 
 
@@ -754,13 +819,13 @@ def cmd_send(args: argparse.Namespace) -> int:
     if not meta.get("session_id"):
         raise HerdError(9, "no session to resume (worker never emitted a session id)")
 
-    running = pid_alive(meta.get("pid")) and not (tdir / ".done").exists()
+    running = task_process_alive(tdir, meta) and not (tdir / ".done").exists()
     if running:
         if not args.now:
             raise HerdError(9, "task is working; pass --now to interrupt the current turn")
-        stop_pid(meta.get("pid"))
+        stop_task_processes(tdir, meta)
         for _ in range(25):
-            if not pid_alive(meta.get("pid")):
+            if not task_process_alive(tdir, meta):
                 break
             time.sleep(0.2)
 
@@ -784,9 +849,8 @@ def cmd_send(args: argparse.Namespace) -> int:
     write_status(tdir, meta)
 
     pid = launch_helper(args.task, "resume")
-    meta["pid"] = pid
-    atomic_write_json(tdir / "meta.json", meta)
-    emit(args, status_payload(tdir, meta), f"{args.task} working pid={pid} (resumed)")
+    current = read_json(tdir / "meta.json") or meta
+    emit(args, status_payload(tdir, current), f"{args.task} working pid={pid} (resumed)")
     return 0
 
 
@@ -874,7 +938,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
     if not tdir.is_dir():
         raise HerdError(6, f"no such task on this device: {args.task}")
     meta = read_json(tdir / "meta.json") or {}
-    stop_pid(meta.get("pid"))
+    stop_task_processes(tdir, meta)
     mark_terminal(tdir, meta, "killed", "user-kill")
     emit(args, status_payload(tdir, meta), f"{args.task} killed")
     return 0

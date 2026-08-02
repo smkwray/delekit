@@ -180,7 +180,11 @@ text` and passes `--no-session-persistence`.
 
 `spawn` writes `prompt.md` + `meta.json`, then launches a `__run_turn` helper
 with `Popen(..., start_new_session=True)` (POSIX) / `CREATE_NEW_PROCESS_GROUP`
-+ `DETACHED_PROCESS` (Windows). The helper streams the backend into
++ `DETACHED_PROCESS` (Windows). The helper's own backend child is launched the
+same way, through the single `_child_popen_kwargs` helper. Both must get their
+own process group on both platforms: `stop_pid` signals the *group*, so a child
+sharing its parent's group would take the parent down with it when one task is
+stopped. The helper streams the backend into
 `events.jsonl`, updates `report.md`, enforces `stall_after` + `deadline`,
 captures `session_id` into `meta.json` (atomic), and drops `.done` on exit.
 `spawn` returns the task name and pid immediately. Everything else reads disk.

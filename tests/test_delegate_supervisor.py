@@ -2,6 +2,7 @@
 """Step-1 tests for tools/delegate_supervisor.py. Stdlib only, no network."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -60,6 +61,41 @@ class TestReconcile(Base):
         payload = ds.reconcile(ds.task_dir("t1"), enforce=False)
         self.assertEqual(payload["state"], "failed")
         self.assertTrue((ds.task_dir("t1") / ".done").exists())
+
+    def test_live_backend_blocks_false_failure_and_resume(self):
+        tdir = self.make("t1-child", state="working", pid=999999999, done=False)
+        ds.atomic_write_json(tdir / "child.json", {"backend_pid": os.getpid()})
+        payload = ds.reconcile(tdir, enforce=False)
+        self.assertEqual(payload["state"], "working")
+        self.assertTrue(payload["backend_pid_alive"])
+        self.assertEqual(payload["stall_reason"], "supervisor-exited-backend-still-running")
+        self.assertFalse((tdir / ".done").exists())
+
+    def test_helper_pid_file_wins_over_stale_meta_pid(self):
+        tdir = self.make("t1-helper", state="working", pid=999999999, done=False)
+        ds.atomic_write_json(tdir / "helper.json", {"helper_pid": os.getpid()})
+        payload = ds.reconcile(tdir, enforce=False)
+        self.assertEqual(payload["state"], "working")
+        self.assertEqual(payload["pid"], os.getpid())
+        self.assertTrue(payload["pid_alive"])
+        self.assertFalse((tdir / ".done").exists())
+
+    def test_orphan_backend_still_obeys_deadline(self):
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            **ds._child_popen_kwargs(new_process_group=True),
+        )
+        try:
+            tdir = self.make("t1-deadline-child", state="working", pid=999999999,
+                             done=False, deadline_in=-1)
+            ds.atomic_write_json(tdir / "child.json", {"backend_pid": child.pid})
+            payload = ds.reconcile(tdir, enforce=True)
+            self.assertEqual(payload["state"], "failed")
+            self.assertEqual(payload["stall_reason"], "deadline")
+            child.wait(timeout=5)
+        finally:
+            if child.poll() is None:
+                child.kill()
 
     def test_done_terminal_is_stable(self):
         self.make("t2", state="done", pid=None, done=True)
@@ -173,6 +209,39 @@ class TestAtomicIO(Base):
         p = Path(self.tmp.name) / "bad.json"
         p.write_text("{not json", encoding="utf-8")
         self.assertIsNone(ds.read_json(p))
+
+    @unittest.skipUnless(os.name == "nt", "Windows process flags")
+    def test_windows_children_are_launched_without_a_console_window(self):
+        kwargs = ds._child_popen_kwargs(new_process_group=True)
+        self.assertTrue(kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertTrue(kwargs["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertTrue(kwargs["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW)
+        self.assertEqual(kwargs["startupinfo"].wShowWindow, subprocess.SW_HIDE)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
+    def test_posix_children_get_their_own_process_group(self):
+        # stop_pid signals the whole group, so a child sharing the parent's group
+        # takes the parent down with it. Assert the detachment request is honoured
+        # rather than silently dropped on this platform.
+        self.assertTrue(ds._child_popen_kwargs(new_process_group=True)["start_new_session"])
+        self.assertEqual(ds._child_popen_kwargs(), {})
+
+    @unittest.skipIf(os.name == "nt", "POSIX process groups")
+    def test_stopping_a_task_does_not_signal_its_launcher(self):
+        # End-to-end guard for the same contract: run a child the way run_turn
+        # does, stop it, and confirm this process survives.
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            **ds._child_popen_kwargs(new_process_group=True),
+        )
+        try:
+            self.assertNotEqual(os.getpgid(child.pid), os.getpgid(0))
+            ds.stop_pid(child.pid)
+            child.wait(timeout=10)
+            self.assertFalse(ds.pid_alive(child.pid))
+        finally:
+            if child.poll() is None:
+                child.kill()
 
 
 if __name__ == "__main__":
