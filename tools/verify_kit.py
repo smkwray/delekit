@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import sys
@@ -31,6 +33,7 @@ REQUIRED = [
     "bin/ccg-snippet.ps1",
     "bin/install-launchd-macos.sh",
     "tools/seed_claude_context_cache.py",
+    "bin/hooks/verify-delegate-spawn.py",
     "tests/test_seed_context_cache.py",
     "tests/test-macos-install.sh",
     "tests/smoke-test.ps1",
@@ -104,11 +107,52 @@ def main() -> int:
         if len(words) > 80:
             fail(f"agent body exceeds 80 words ({len(words)}): {path.relative_to(ROOT)}", failures)
 
+    # The spawn-verification hook exists to stop a delegate silently running as
+    # something else, and only protects a session that registers it. It was
+    # written, documented, and left unwired for five days, during which one
+    # session sent 42 of 200 delegates to the wrong model and account. Assert
+    # the wiring, not just the file.
+    hook_script = ROOT / "bin" / "hooks" / "verify-delegate-spawn.py"
+    if not hook_script.is_file():
+        fail("missing spawn-verification hook: bin/hooks/verify-delegate-spawn.py", failures)
+    seeder = (ROOT / "tools" / "seed_claude_context_cache.py").read_text(encoding="utf-8")
+    for token, purpose in {
+        "seed_hooks": "register the spawn hook on every launch",
+        "verify-delegate-spawn.py": "name the hook script it registers",
+        "PreToolUse": "register on the pre-spawn event",
+    }.items():
+        if token not in seeder:
+            fail(f"seeder does not {purpose}: {token}", failures)
+
+    # Static checks cover what the kit ships; the 2026-07-29 incident was device
+    # state, not repo state. When a gateway profile exists on this machine,
+    # report whether it is actually protected right now. A missing profile is
+    # not a failure -- verify_kit runs on machines that have never launched ccg.
+    profile = os.environ.get("CLAUDE_CONFIG_DIR")
+    settings = Path(profile).expanduser() / "settings.json" if profile else None
+    if settings is not None and settings.is_file():
+        try:
+            live = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            fail(f"cannot read {settings}: {exc}", failures)
+            live = {}
+        entries = (live.get("hooks") or {}).get("PreToolUse") or []
+        registered = any(
+            "verify-delegate-spawn.py" in str(inner.get("command", ""))
+            for entry in entries if isinstance(entry, dict)
+            for inner in (entry.get("hooks") or []) if isinstance(inner, dict)
+        )
+        if not registered:
+            fail(f"spawn hook not registered in the live profile ({settings}); "
+                 "relaunch via claudex, or run tools/seed_claude_context_cache.py",
+                 failures)
+
     launcher_checks = {
         "CLAUDE_CODE_SUBAGENT_MODEL": "unset/remove global subagent override",
         "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT": "forward effort for custom aliases",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "gateway cache optimization",
         "ENABLE_TOOL_SEARCH": "conservative gateway tool-search policy",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "lifetime spawn cap above the 200 default",
         "DELEGATE_PARENT_MODEL": "parent-model pin against global /model contamination",
         "DELEKIT_TANDY_CONTEXT_MODE": "opt-in isolated 272k Tandy profile",
         "seed_claude_context_cache.py": "seed opt-in Tandy client data",

@@ -10,12 +10,16 @@ from pathlib import Path
 from tools.seed_claude_context_cache import (
     CREDENTIAL_FILE,
     FAMILY,
+    HOOK_EVENT,
+    HOOK_MATCHER,
+    HOOK_SCRIPT,
     SETTINGS_FILE,
     WINDOW,
     patch_document,
     quarantine_credential,
     seed,
     seed_attribution,
+    seed_hooks,
 )
 
 
@@ -148,6 +152,57 @@ class SeedContextCacheTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Cannot read"):
                 seed_attribution(Path(raw))
             self.assertEqual(settings_path.read_text(encoding="utf-8"), "not json")
+
+    def _spawn_hooks(self, document: dict) -> list:
+        entries = (document.get("hooks") or {}).get(HOOK_EVENT) or []
+        return [entry for entry in entries
+                if any(HOOK_SCRIPT in inner.get("command", "")
+                       for inner in entry.get("hooks", []))]
+
+    def test_spawn_hook_is_registered_exactly_once(self) -> None:
+        # The hook only protects a session that registers it. It shipped
+        # unwired for five days, during which one session sent 42 of 200
+        # delegates to the wrong model, account, and checkout in silence.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+
+            self.assertTrue(seed_hooks(config_dir, Path("/kit")))
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+            ours = self._spawn_hooks(document)
+            self.assertEqual(len(ours), 1)
+            self.assertEqual(ours[0]["matcher"], HOOK_MATCHER)
+            self.assertIn("/kit", ours[0]["hooks"][0]["command"])
+
+            # Idempotent: a relaunch must not rewrite the file or duplicate.
+            first_mtime = settings_path.stat().st_mtime_ns
+            self.assertFalse(seed_hooks(config_dir, Path("/kit")))
+            self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
+
+    def test_spawn_hook_preserves_other_hooks_and_follows_a_moved_kit(self) -> None:
+        # Registering must not evict hooks the user configured, and a kit that
+        # moves must be repointed rather than left stale beside a new entry.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+            settings_path.write_text(json.dumps({
+                "theme": "dark",
+                "hooks": {HOOK_EVENT: [
+                    {"matcher": "Bash",
+                     "hooks": [{"type": "command", "command": "audit.py"}]},
+                ]},
+            }), encoding="utf-8")
+
+            seed_hooks(config_dir, Path("/kit"))
+            self.assertTrue(seed_hooks(config_dir, Path("/moved")))
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(document["theme"], "dark")
+            entries = document["hooks"][HOOK_EVENT]
+            self.assertTrue(any(entry["matcher"] == "Bash" for entry in entries))
+            ours = self._spawn_hooks(document)
+            self.assertEqual(len(ours), 1)
+            self.assertIn("/moved", ours[0]["hooks"][0]["command"])
 
     def test_seed_refuses_malformed_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

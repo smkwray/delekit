@@ -14,6 +14,14 @@ drops Tandy to 200k.
 Commit attribution. Settings are per-profile and the installer creates this one
 empty, so disabling the `Co-Authored-By:` trailer in ~/.claude/settings.json has
 no effect on gateway sessions - the trailer silently returns for every one.
+
+Spawn verification. bin/hooks/verify-delegate-spawn.py only protects a session
+that actually registers it, and a hook documented but never wired up protects
+nothing: on 2026-07-29 a session sent 42 of 200 delegates to claude-sonnet-5 on
+Claude quota - wrong model, wrong account, and no worktree isolation for the 16
+that asked for one - while the hook that denies exactly that shape sat unused.
+Registering it here makes it a property of the profile rather than something a
+device has to remember.
 """
 
 from __future__ import annotations
@@ -39,6 +47,11 @@ IDENTITY_KEYS = ("oauthAccount", "userID")
 # key, so it is removed rather than left to fight with it.
 SETTINGS_FILE = "settings.json"
 ATTRIBUTION = {"commit": "", "pr": ""}
+# The PreToolUse hook that denies a delegate spawn which would silently run as
+# something else. Matched on the Agent tool; see the module docstring.
+HOOK_EVENT = "PreToolUse"
+HOOK_MATCHER = "Agent"
+HOOK_SCRIPT = "bin/hooks/verify-delegate-spawn.py"
 
 
 def patch_client_data(value: Any) -> dict[str, Any]:
@@ -133,6 +146,61 @@ def seed_attribution(config_dir: Path) -> bool:
     return True
 
 
+def hook_command(kit_root: Path) -> str:
+    return f"python3 {kit_root / HOOK_SCRIPT}"
+
+
+def patch_hooks(document: dict[str, Any], kit_root: Path) -> dict[str, Any]:
+    """Ensure exactly one registration of the spawn-verification hook.
+
+    Adds to the existing PreToolUse list rather than replacing it, so unrelated
+    hooks survive. A stale entry pointing at a different checkout is rewritten
+    in place instead of duplicated, which is what makes re-running safe after
+    the kit moves.
+    """
+    patched = copy.deepcopy(document)
+    command = hook_command(kit_root)
+    hooks = patched.get("hooks")
+    hooks = dict(hooks) if isinstance(hooks, dict) else {}
+    raw_event = hooks.get(HOOK_EVENT)
+    event = list(raw_event) if isinstance(raw_event, list) else []
+
+    def is_ours(entry: Any) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        return any(isinstance(inner, dict) and HOOK_SCRIPT in str(inner.get("command", ""))
+                   for inner in entry.get("hooks", []) or [])
+
+    ours = {"matcher": HOOK_MATCHER,
+            "hooks": [{"type": "command", "command": command}]}
+    kept = [entry for entry in event if not is_ours(entry)]
+    hooks[HOOK_EVENT] = kept + [ours]
+    patched["hooks"] = hooks
+    return patched
+
+
+def seed_hooks(config_dir: Path, kit_root: Path) -> bool:
+    """Register the spawn-verification hook; return whether it changed."""
+    settings_path = config_dir / SETTINGS_FILE
+    if settings_path.exists():
+        try:
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Cannot read {settings_path}: {exc}") from exc
+        if not isinstance(document, dict):
+            raise RuntimeError(f"{settings_path}: expected a top-level JSON object")
+        mode = settings_path.stat().st_mode & 0o777
+    else:
+        document = {}
+        mode = 0o600
+
+    patched = patch_hooks(document, kit_root)
+    if patched == document:
+        return False
+    write_json(settings_path, patched, mode)
+    return True
+
+
 def write_json(path: Path, payload: dict[str, Any], mode: int) -> None:
     """Replace path atomically, so a crash cannot leave a half-written file."""
     fd, temporary_name = tempfile.mkstemp(prefix=f"{path.name}.", dir=path.parent)
@@ -169,10 +237,14 @@ def main() -> None:
     if not raw_config_dir:
         raise SystemExit("CLAUDE_CONFIG_DIR must be set")
     config_dir = Path(raw_config_dir).expanduser()
+    # DELEKIT_ROOT is exported by the launchers; fall back to this file's own
+    # location so a direct run still registers a usable absolute command.
+    kit_root = Path(os.environ.get("DELEKIT_ROOT") or Path(__file__).resolve().parents[1])
     try:
         moved = quarantine_credential(config_dir)
         seed(config_dir)
         seed_attribution(config_dir)
+        seed_hooks(config_dir, kit_root)
     except (OSError, RuntimeError) as exc:
         raise SystemExit(str(exc)) from exc
     if moved is not None:
