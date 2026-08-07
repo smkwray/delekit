@@ -50,6 +50,12 @@ export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="${CLAUDE_CODE_ENABLE_GATEWAY_
 export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT="${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-1}"
 export CLAUDE_CODE_ATTRIBUTION_HEADER="${CLAUDE_CODE_ATTRIBUTION_HEADER:-0}"
 export ENABLE_TOOL_SEARCH="${ENABLE_TOOL_SEARCH:-false}"
+# Claude Code caps *lifetime* subagent spawns per session at 200 and never
+# decrements the counter. A herding session reaches that in a day of ordinary
+# delegation, after which every Agent spawn is refused for the rest of the
+# session. Raising it does not raise load: concurrency is a separate cap
+# (CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS, default 20).
+export CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION="${CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION:-1000}"
 export DELEKIT_ROOT="$KIT_ROOT"
 
 case "${DELEKIT_TANDY_CONTEXT_MODE:-clientdata-272k}" in
