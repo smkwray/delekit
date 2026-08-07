@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Step-2+ tests: backend adapters, the detached turn helper, spawn/result/send.
 
-No network. A fake codex/claude CLI (tests/fake_backend.py) is pointed at via the
-DELEGATE_CODEX_BIN / DELEGATE_CLAUDE_BIN overrides, so spawn runs the real
-detached helper against a controllable JSON event stream.
+No network. A fake codex/claude/muse CLI (tests/fake_backend.py) is pointed at via
+the DELEGATE_CODEX_BIN / DELEGATE_CLAUDE_BIN / DELEGATE_MUSE_BIN overrides, so
+spawn runs the real detached helper against a controllable JSON event stream.
 """
 import contextlib
 import io
@@ -41,12 +41,13 @@ class Base(unittest.TestCase):
         os.chmod(FAKE, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         os.environ["DELEGATE_CODEX_BIN"] = str(FAKE)
         os.environ["DELEGATE_CLAUDE_BIN"] = str(FAKE)
+        os.environ["DELEGATE_MUSE_BIN"] = str(FAKE)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
         self.proj.cleanup()
         for k in ("DELEGATE_STATE_DIR", "DELEKIT_DEVICE_ID", "DELEGATE_CODEX_BIN",
-                  "DELEGATE_CLAUDE_BIN", "FAKE_HANG", "FAKE_DELAY_S"):
+                  "DELEGATE_CLAUDE_BIN", "DELEGATE_MUSE_BIN", "FAKE_HANG", "FAKE_DELAY_S"):
             os.environ.pop(k, None)
 
     def wait_done(self, task, timeout=20.0):
@@ -85,6 +86,34 @@ class TestParsers(unittest.TestCase):
         asst = {"type": "assistant", "message": {"content": [{"type": "text", "text": "mid"}]}}
         self.assertEqual(b.parse(asst).get("message"), "mid")
 
+    def test_muse_parser_session_and_terminal_text(self):
+        b = ds.BACKENDS["muse"]
+        env = {"stream": {"kind": "session", "id": "s3"}, "payload_type": "run.lifecycle.started",
+               "payload": {"kind": "run_started"}}
+        self.assertEqual(b.parse(env).get("session_id"), "s3")
+        term = {"stream": {"kind": "session", "id": "s3"}, "payload_type": "run.terminal.completed",
+                "payload": {"kind": "run_terminal", "terminal": "completed", "text": "final"}}
+        self.assertEqual(b.parse(term).get("message"), "final")
+
+    def test_muse_parser_ignores_streaming_deltas(self):
+        # Deltas repeat the answer in chunks; treating them as messages would
+        # leave a truncated last chunk as the report.
+        b = ds.BACKENDS["muse"]
+        delta = {"stream": {"kind": "session", "id": "s3"}, "payload_type": "run.output.delta",
+                 "payload": {"kind": "run_output_delta", "text": "fin"}}
+        self.assertIsNone(b.parse(delta).get("message"))
+        # A run stream must not be mistaken for the session id.
+        run = {"stream": {"kind": "run", "id": "r1"}, "payload_type": "run.output.delta", "payload": {}}
+        self.assertIsNone(b.parse(run).get("session_id"))
+
+    def test_muse_access_mapping(self):
+        b = ds.BACKENDS["muse"]
+        self.assertEqual(b.sandbox_args("danger-full-access"), ["--yolo"])
+        self.assertIn("--disable-shell", b.sandbox_args("read-only"))
+        self.assertIn("--disable-write", b.sandbox_args("read-only"))
+        # workspace-write keeps muse's own sandbox on: only approvals are off.
+        self.assertEqual(b.sandbox_args("workspace-write"), ["--disable-approval"])
+
 
 class TestSpawnResult(Base):
     def test_codex_spawn_runs_and_reports(self):
@@ -102,6 +131,15 @@ class TestSpawnResult(Base):
         payload = ds.reconcile(ds.task_dir("cl"))
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], "sess-fake-0001")
+
+    def test_muse_spawn_runs_and_reports(self):
+        self.spawn(name="ms", backend="muse")
+        self.assertTrue(self.wait_done("ms"))
+        payload = ds.reconcile(ds.task_dir("ms"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        # The prompt reached muse through --prompt-file, not stdin.
+        self.assertIn("do the thing", (ds.task_dir("ms") / "report.md").read_text())
 
     def test_question_marks_awaiting_reply(self):
         self.spawn(prompt="please ASKQ now", name="q1")
@@ -142,6 +180,16 @@ class TestSendResume(Base):
         self.assertEqual(payload["session_id"], "sess-fake-0001")
         report = (ds.task_dir("r1") / "report.md").read_text()
         self.assertIn("resumed:", report)
+
+    def test_muse_send_resumes_via_session_id(self):
+        self.spawn(prompt="first turn", name="mr", backend="muse")
+        self.assertTrue(self.wait_done("mr"))
+        self.assertEqual(quiet_main(["send", "mr", "second turn", "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("mr"))
+        payload = ds.reconcile(ds.task_dir("mr"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertIn("resumed:", (ds.task_dir("mr") / "report.md").read_text())
 
     def test_send_without_session_is_error(self):
         # Fabricate a task that never captured a session id.

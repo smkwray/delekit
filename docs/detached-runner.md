@@ -13,17 +13,29 @@ The missing delegation quadrant. Today delekit covers three:
 | one-shot   | —                                        | `dairy`               |
 | resumable/steerable/detached | `tandy` (native)             | **`herd`** ← this      |
 
-`herd` gives you **detached, resumable, steerable** headless workers on Codex or
-Claude, with **no gateway** and **no Claude session** — drivable from a bare
-terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
+`herd` gives you **detached, resumable, steerable** headless workers on Codex,
+Claude, or Muse, with **no gateway** and **no Claude session** — drivable from a
+bare terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
 sibling of `tandy`, and the steerable sibling of `dairy`.
 
-Backends: **codex and claude only.** (No grok, no gemini, no Antigravity (`agy`)
-for the detached path — their headless CLIs emit no streaming JSON or session id
-we can scrape to observe activity and resume. `agy` print mode (`-p`) returns
-only the final plain-text answer, with no event stream and no resume handle on
-stdout, so it fits `dairy` but not this supervisor. It is the same reason gemini
-was excluded.)
+Backends: **codex, claude, and muse.** (No grok, no gemini, no Antigravity
+(`agy`) for the detached path — their headless CLIs emit no streaming JSON or
+session id we can scrape to observe activity and resume. `agy` print mode (`-p`)
+returns only the final plain-text answer, with no event stream and no resume
+handle on stdout, so it fits `dairy` but not this supervisor. It is the same
+reason gemini was excluded.)
+
+`muse exec --json` qualifies on both counts: every record carries
+`stream.id` (the session id) and the turn's answer arrives as one
+`run.terminal.completed` event. Resume is the same command plus `--session-id`,
+so `herd send` continues the same conversation. Two muse-specific notes:
+
+- **The prompt goes in by file, not stdin.** The adapter points `--prompt-file`
+  at the `prompt.md` the supervisor already rewrites before every spawn and
+  send, which also keeps long prompts off argv.
+- **No separate reasoning stream.** Muse folds reasoning into the answer text,
+  so `herd peek --thinking` stays empty for muse workers. `peek` itself still
+  works.
 
 ## Non-negotiable: sessions cannot leak
 
@@ -145,11 +157,14 @@ herd prune  [--apply] [--idle-min N] [--any-owner]   GC terminal+idle dirs (dry-
 herd doctor                                   env / dirs / backend checks
 ```
 
-Core opts mirror `dairy`: `--backend codex|claude`, `--profile terra|luna|sol`
-(codex only, resolved from `config/models.env`; `terra` default), `--model`, `--effort`,
-`--access`/`--sandbox`, `--worktree` + `--dirty-policy` + `--no-auto-commit`,
-`--no-preamble`, `--json`. Access→sandbox/permission mapping and the access
-preamble are lifted verbatim from `dairy` so the two runners stay consistent.
+Core opts mirror `dairy`: `--backend codex|claude|muse`, `--profile`
+(backend-specific, resolved from `config/models.env`: codex takes
+`terra|luna|sol` with `terra` default, muse takes `spark`), `--model`,
+`--effort`, `--access`/`--sandbox`, `--worktree` + `--dirty-policy` +
+`--no-auto-commit`, `--no-preamble`, `--json`. Access→sandbox/permission mapping
+and the access preamble are lifted verbatim from `dairy` so the two runners stay
+consistent — including muse's read-only caveat (it loses the shell; see
+[dairy-runner.md](dairy-runner.md)).
 
 `--worktree` always creates `<project>/.worktrees/<name>` and requires
 `.worktrees/` in the project's root `.gitignore`.
@@ -198,7 +213,7 @@ tools/delegate_supervisor.py          the supervisor (stdlib only)
 bin/herd.sh  bin/herd.ps1             thin shims on PATH (wired by the installers)
 tests/test_delegate_supervisor.py     reaper / prune / list / kill against fixtures
 tests/test_delegate_backends.py       spawn/result/send/stall via a fake backend
-tests/fake_backend.py                 a controllable codex/claude stand-in, no network
+tests/fake_backend.py                 a controllable codex/claude/muse stand-in, no network
 docs/detached-runner.md               this doc
 ```
 
@@ -209,7 +224,8 @@ speak one profile vocabulary.
 ## Testing
 
 `python3 -m unittest tests.test_delegate_supervisor tests.test_delegate_backends`.
-The backend tests point `DELEGATE_CODEX_BIN` / `DELEGATE_CLAUDE_BIN` at
+The backend tests point `DELEGATE_CODEX_BIN` / `DELEGATE_CLAUDE_BIN` /
+`DELEGATE_MUSE_BIN` at
 `tests/fake_backend.py`, which emits each backend's streaming-JSON schema, so the
 full detach → capture-session → report → resume path runs with no network. The
 provider event schemas the adapters parse are the integration boundary to

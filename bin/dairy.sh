@@ -40,9 +40,10 @@ Prompt input (choose one):
   --prompt-stdin           read task from stdin (also automatic for piped stdin)
 
 Core options:
-  --backend NAME           codex (default), claude, or agy
+  --backend NAME           codex (default), claude, muse, or agy
   --profile NAME           backend-specific model profile from config/models.env:
                            codex: terra (default), luna, sol
+                           muse: spark (default)
                            agy: flash-high (default), flash-low, pro-high
   --model ID               explicit per-run override; REQUIRED for --backend claude,
                            which has no profile mapping
@@ -134,13 +135,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$BACKEND" in codex|claude|agy) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
+case "$BACKEND" in codex|claude|muse|agy) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
 
 if [[ "$BACKEND" == "codex" ]]; then
   [[ -n "$PROFILE" ]] || PROFILE="terra"
   case "$PROFILE" in terra|luna|sol) ;; *) echo "Codex profile must be terra, luna, or sol" >&2; exit 2 ;; esac
+elif [[ "$BACKEND" == "muse" ]]; then
+  [[ -n "$PROFILE" ]] || PROFILE="spark"
+  case "$PROFILE" in spark) ;; *) echo "muse profile must be spark" >&2; exit 2 ;; esac
 elif [[ "$BACKEND" == "agy" ]]; then
   [[ -n "$PROFILE" ]] || PROFILE="flash-high"
   case "$PROFILE" in
@@ -189,10 +193,16 @@ profile_upper="$(printf '%s' "$PROFILE" | tr '[:lower:]-' '[:upper:]_')"
 model_var="DELEGATE_MODEL_${profile_upper}"
 effort_var="DELEGATE_EFFORT_${profile_upper}"
 agy_model_var="DELEGATE_AGY_MODEL_${profile_upper}"
+muse_model_var="DELEGATE_MUSE_MODEL_${profile_upper}"
+muse_effort_var="DELEGATE_MUSE_EFFORT_${profile_upper}"
 if [[ "$BACKEND" == "codex" ]]; then
   [[ -n "$MODEL" ]] || MODEL="${!model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No model configured for profile $PROFILE" >&2; exit 2; }
   [[ -n "$EFFORT" ]] || EFFORT="${!effort_var:-high}"
+elif [[ "$BACKEND" == "muse" ]]; then
+  [[ -n "$MODEL" ]] || MODEL="${!muse_model_var:-}"
+  [[ -n "$MODEL" ]] || { echo "No muse model configured for profile $PROFILE" >&2; exit 2; }
+  [[ -n "$EFFORT" ]] || EFFORT="${!muse_effort_var:-high}"
 elif [[ "$BACKEND" == "agy" ]]; then
   # agy slugs bake the effort tier into the name, so a profile resolves to a full
   # agy slug (DELEGATE_AGY_MODEL_<PROFILE>) and no separate --effort is sent.
@@ -343,6 +353,28 @@ case "$BACKEND" in
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     [[ -n "$EFFORT" ]] && args+=(--effort "$EFFORT")
     (cd "$EXEC_ROOT" && env -u CLAUDECODE claude "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
+    ;;
+  muse)
+    # Muse CLI, headless `exec`: the final answer is plain text on stdout, and
+    # the prompt comes from the composed prompt file already written above (no
+    # stdin path, and this avoids an argv limit on long prompts).
+    #
+    # Approval and the sandbox are ON by default; approvals must be disabled or
+    # a headless run would block on them. Measured against Muse 0.1.0 on macOS:
+    # the default sandbox confines shell writes to the workspace plus temp dirs
+    # (a $HOME write is denied, /tmp is allowed), which is the same shape codex
+    # workspace-write has, so workspace-write maps to the default sandbox.
+    # --disable-write only blocks the non-shell write tools; the shell can still
+    # write, so read-only must also drop the shell to be honest about the label.
+    args=(exec --model "$MODEL" --reasoning-effort "$EFFORT" --workspace "$EXEC_ROOT")
+    case "$ACCESS" in
+      read-only) args+=(--disable-approval --disable-write --disable-shell) ;;
+      workspace-write) args+=(--disable-approval) ;;
+      danger-full-access) args+=(--yolo) ;;
+    esac
+    args+=(--prompt-file "$prompt_log")
+    (cd "$EXEC_ROOT" && muse "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
   agy)

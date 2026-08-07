@@ -25,7 +25,12 @@ The runner prepends one short access line and, when applicable, one worktree lin
 
 ## Profiles and central model mapping
 
-Profiles are backend-specific and resolve through `config/models.env`. Codex uses `terra` (default), `luna`, and `sol`. Antigravity (`agy`) uses `flash-high` (default) = `gemini-3.6-flash-high`, `flash-low` = `gemini-3.6-flash-low`, and `pro-high` = `gemini-3.1-pro-high`. The agy slug carries the effort tier, so the runner sends no separate `--effort`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window and are canonicalized in status output. `--model`/`-Model` (and `--effort`/`-Effort` for Codex) override a single run. Claude model choices remain explicit because its provider default is better handled by its own CLI; `agy models` lists valid `--model` slugs.
+Profiles are backend-specific and resolve through `config/models.env`. Codex uses `terra` (default), `luna`, and `sol`. Muse uses `spark` (default) = `muse-spark-1.2-contributor`, and like Codex takes a separate effort, so `--effort`/`-Effort` applies (muse accepts `none|minimal|low|medium|high|xhigh|ultra`; the profile default is `high`). Antigravity (`agy`) uses `flash-high` (default) = `gemini-3.6-flash-high`, `flash-low` = `gemini-3.6-flash-low`, and `pro-high` = `gemini-3.1-pro-high`. The agy slug carries the effort tier, so the runner sends no separate `--effort`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window and are canonicalized in status output. `--model`/`-Model` (and `--effort`/`-Effort` for Codex and Muse) override a single run. Claude model choices remain explicit because its provider default is better handled by its own CLI; `agy models` lists valid `--model` slugs.
+
+**Muse tokens are discounted in exchange for training rights.** The
+`-contributor` model is priced down because the provider may use session content
+for product improvement — the CLI says so at startup. Keep private or client
+material on another backend.
 
 ## Examples
 
@@ -33,6 +38,7 @@ Profiles are backend-specific and resolve through `config/models.env`. Codex use
 dairy write --profile terra --prompt-file task.md --worktree
 dairy read --profile sol --prompt-stdin < audit.md
 dairy read --backend agy --profile flash-high --prompt 'audit this checkout'
+dairy write --backend muse --prompt-file task.md --worktree
 dairy full --model explicit-provider-id --prompt 'authorized host task'
 ```
 
@@ -40,6 +46,7 @@ dairy full --model explicit-provider-id --prompt 'authorized host task'
 dairy write -Profile terra -PromptFile task.md -Worktree
 Get-Content audit.md -Raw | dairy read -Profile sol -PromptStdin
 dairy read -Backend agy -Profile flash-high -Prompt 'audit this checkout'
+dairy write -Backend muse -PromptFile task.md -Worktree
 dairy full -Model explicit-provider-id -Prompt 'authorized host task'
 ```
 
@@ -98,6 +105,18 @@ Codex `read-only` and `workspace-write` runs use the selected sandbox with `appr
 
 `agy` has no Codex-style per-command sandbox. In headless mode it soft-denies any tool that would otherwise prompt (`write_file`, shell commands) unless `--dangerously-skip-permissions` is set — and that flag is all-or-nothing and **not** filesystem-confined (it will write outside the workspace). So the runner supports only two `agy` access modes: `read-only` → `--mode plan` (tool writes are soft-denied, so the run stays read-only), and `full` → `--dangerously-skip-permissions` (unrestricted). **`agy` cannot honor `workspace-write`** — it has no confined write mode — so `dairy workspace --backend agy` is refused up front; use `readonly`, or `full` for explicit unrestricted writes, or use codex/claude when you need confined workspace writes. The prompt is passed as the value of `-p`, not on stdin.
 
+`muse` has approval and a sandbox ON by default, so every access mode disables approvals (a headless run would otherwise block on them) and then differs in what it leaves standing. Measured against Muse 0.1.0 on macOS, not inferred from flag names:
+
+| dairy access | muse flags | what it actually enforces |
+| --- | --- | --- |
+| `workspace-write` | `--disable-approval` | Muse's own sandbox stays on. A shell write to `$HOME` is **denied**; the workspace and temp dirs (`/tmp`) are writable — the same shape as Codex `workspace-write`. |
+| `read-only` | `--disable-approval --disable-write --disable-shell` | Write tools are policy-denied (`tool policy denied filesystem write`) and the shell is gone. File reads still work. |
+| `full` | `--yolo` | Unrestricted and **not** workspace-confined — a `$HOME` write succeeds. |
+
+**`read-only` on muse costs the shell.** `--disable-write` alone blocks only the non-shell write tools; the shell can still redirect into a file, so an honest read-only has to drop `--disable-shell` too. The delegate can read files but cannot run `git log`, `rg`, or a test command. When a read-only muse task needs the shell, use codex instead — its sandbox denies writes without removing the shell.
+
+The prompt is passed via `--prompt-file` (the composed prompt log), not on stdin.
+
 **Computer use requires `full` mode.** Launching or scripting GUI apps — `open -a`, `osascript`/AppleScript, browsers — is blocked by the sandbox in `workspace-write` and `read-only`, so those tasks fail with permission errors rather than prompting. `full` runs unsandboxed; grant it only when the task genuinely needs the machine, and expect the worker to report every external effect (the access preamble instructs it to).
 
 ---
@@ -110,10 +129,12 @@ Codex `read-only` and `workspace-write` runs use the selected sandbox with `appr
 CLI's default model while the status JSON reports `"profile":"sol"`.
 
 **Cause.** `config/models.env` maps backend-specific profiles to Codex IDs
-(`DELEGATE_MODEL_*`) and agy IDs (`DELEGATE_AGY_MODEL_*`); Claude has no such mapping.
+(`DELEGATE_MODEL_*`), muse IDs (`DELEGATE_MUSE_MODEL_*`), and agy IDs
+(`DELEGATE_AGY_MODEL_*`); Claude has no such mapping.
 
-**Fix.** Both runners resolve profiles for the `codex` and `agy` backends, and
-**fail** rather than guess for `--backend claude` — pass `--model` explicitly there.
+**Fix.** Both runners resolve profiles for the `codex`, `muse`, and `agy`
+backends, and **fail** rather than guess for `--backend claude` — pass `--model`
+explicitly there.
 
 ---
 

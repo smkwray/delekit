@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'claude', 'agy')]
+    [ValidateSet('codex', 'claude', 'muse', 'agy')]
     [string]$Backend,
 
     [string]$Profile,
@@ -86,7 +86,7 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'claude', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'claude', 'muse', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
 $ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
@@ -97,6 +97,9 @@ if (-not $Profile -and $env:DELEGATE_PROFILE) {
 if ($Backend -eq 'codex') {
     if (-not $Profile) { $Profile = 'terra' }
     if ($Profile -notin @('terra', 'luna', 'sol')) { throw 'Codex profile must be terra, luna, or sol' }
+} elseif ($Backend -eq 'muse') {
+    if (-not $Profile) { $Profile = 'spark' }
+    if ($Profile -notin @('spark')) { throw 'muse profile must be spark' }
 } elseif ($Backend -eq 'agy') {
     if (-not $Profile) { $Profile = 'flash-high' }
     $legacyAgyProfiles = @{
@@ -145,6 +148,10 @@ if ($Backend -eq 'codex') {
     if (-not $Model) { $Model = $Config["DELEGATE_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No model configured for profile $Profile" }
     if (-not $Effort) { $Effort = Get-ConfigValue -Key "DELEGATE_EFFORT_$profileUpper" -Default 'high' }
+} elseif ($Backend -eq 'muse') {
+    if (-not $Model) { $Model = $Config["DELEGATE_MUSE_MODEL_$profileUpper"] }
+    if (-not $Model) { throw "No muse model configured for profile $Profile" }
+    if (-not $Effort) { $Effort = Get-ConfigValue -Key "DELEGATE_MUSE_EFFORT_$profileUpper" -Default 'high' }
 } elseif ($Backend -eq 'agy') {
     # agy slugs bake the effort tier into the name, so a profile resolves to a full
     # agy slug and no separate -Effort is sent. -Model overrides for a single run.
@@ -301,6 +308,32 @@ try {
             if ($Effort) { $arguments += @('--effort', $Effort) }
             Push-Location $ExecutionRoot
             try { $ComposedPrompt | & claude @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally { Pop-Location }
+            if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
+        }
+        'muse' {
+            # Muse CLI, headless `exec`: the final answer is plain text on stdout
+            # and the prompt is read from the composed prompt file written above.
+            #
+            # Approval and the sandbox are ON by default; approvals must be off or
+            # a headless run blocks on them. Muse's default sandbox confines shell
+            # writes to the workspace plus temp dirs (same shape as codex
+            # workspace-write). --disable-write blocks only the non-shell write
+            # tools, so read-only drops the shell too rather than overstating the
+            # label. See docs/dairy-runner.md.
+            $arguments = @('exec', '--model', $Model, '--reasoning-effort', $Effort, '--workspace', $ExecutionRoot)
+            switch ($Access) {
+                'read-only' { $arguments += @('--disable-approval', '--disable-write', '--disable-shell') }
+                'workspace-write' { $arguments += '--disable-approval' }
+                'danger-full-access' { $arguments += '--yolo' }
+            }
+            $arguments += @('--prompt-file', $PromptLog)
+            # Resolve the application explicitly: an interactive profile may define
+            # a `muse` function, and dairy's access boundary must not depend on
+            # caller command precedence.
+            $museExecutable = (Get-Command muse.exe -CommandType Application -ErrorAction Stop).Source
+            Push-Location $ExecutionRoot
+            try { & $museExecutable @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }

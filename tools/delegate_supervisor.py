@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""herd: detached, resumable, steerable headless delegate workers (codex/claude).
+"""herd: detached, resumable, steerable headless delegate workers.
+
+Backends: codex, claude, muse.
 
 Stdlib only. See docs/detached-runner.md for the design. This is the shared
 cross-platform core; bin/herd.sh and bin/herd.ps1 are thin shims onto it.
@@ -7,7 +9,7 @@ cross-platform core; bin/herd.sh and bin/herd.ps1 are thin shims onto it.
 Backends stream JSON so the turn helper can capture the session id (for resume)
 and observe activity (for the stall watchdog). The exact provider event schema
 is an integration boundary: the parsers below accept a tolerant superset and are
-the point to re-verify after a Codex/Claude CLI upgrade.
+the point to re-verify after a backend CLI upgrade.
 """
 from __future__ import annotations
 
@@ -351,7 +353,70 @@ class ClaudeBackend(Backend):
         return out
 
 
-BACKENDS: dict[str, Backend] = {"codex": CodexBackend(), "claude": ClaudeBackend()}
+class MuseBackend(Backend):
+    """Muse CLI (`muse exec --json`).
+
+    Resume is the same command with `--session-id`: muse continues that session
+    and re-emits the same id, so spawn and resume differ only by that flag.
+
+    Muse reads the prompt from a file, not stdin. The supervisor rewrites
+    prompt.md in the task dir before every spawn and send, so pointing
+    --prompt-file at it also keeps long prompts off argv.
+
+    Access mapping (measured against Muse 0.1.0 on macOS): approval and the
+    sandbox are ON by default, and approvals must be disabled or a headless run
+    blocks. The default sandbox confines shell writes to the workspace plus temp
+    dirs -- a $HOME write is denied -- which is the shape codex workspace-write
+    has. --disable-write stops only the non-shell write tools, so read-only also
+    drops the shell rather than overstating the label.
+    """
+
+    name = "muse"
+    bin_env = "DELEGATE_MUSE_BIN"
+
+    def sandbox_args(self, access: str) -> list[str]:
+        if access == "danger-full-access":
+            return ["--yolo"]
+        if access == "read-only":
+            return ["--disable-approval", "--disable-write", "--disable-shell"]
+        return ["--disable-approval"]
+
+    def _base(self, meta: dict[str, Any]) -> list[str]:
+        exec_root = meta["exec_root"]
+        argv = [self.locate_bin(), "exec", "--json", "--workspace", exec_root]
+        if meta.get("model"):
+            argv += ["--model", meta["model"]]
+        if meta.get("effort"):
+            argv += ["--reasoning-effort", meta["effort"]]
+        argv += self.sandbox_args(meta["access"])
+        argv += ["--prompt-file", str(task_dir(meta["task"]) / "prompt.md")]
+        return argv
+
+    def spawn_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta), "", meta["exec_root"]
+
+    def resume_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta) + ["--session-id", meta["session_id"]], "", meta["exec_root"]
+
+    def parse(self, obj: dict[str, Any]) -> dict[str, str]:
+        # Envelope: {"stream":{"kind":"session","id":...},"payload_type":...,
+        #            "payload":{...}}. The turn's answer arrives once, as
+        # run.terminal.completed; run.output.delta carries the same text in
+        # chunks, so taking only the terminal event avoids duplicating it.
+        # Muse exposes no separate reasoning stream, so `peek --thinking` stays
+        # empty for this backend.
+        out: dict[str, str] = {}
+        stream = obj.get("stream")
+        if isinstance(stream, dict) and stream.get("kind") == "session" and isinstance(stream.get("id"), str):
+            out["session_id"] = stream["id"]
+        payload = obj.get("payload")
+        if str(obj.get("payload_type", "")).startswith("run.terminal.") and isinstance(payload, dict):
+            if isinstance(payload.get("text"), str):
+                out["message"] = payload["text"]
+        return out
+
+
+BACKENDS: dict[str, Backend] = {"codex": CodexBackend(), "claude": ClaudeBackend(), "muse": MuseBackend()}
 
 
 # --------------------------------------------------------------------------- #
@@ -694,19 +759,38 @@ def resolve_prompt(args: argparse.Namespace) -> str:
 PROFILES = ("terra", "luna", "sol")
 DEFAULT_PROFILE = "terra"
 
+# Muse profiles are backend-specific and named for the model family. `spark` is
+# the default; an unqualified --profile terra with --backend muse is
+# indistinguishable from the default and resolves to spark.
+MUSE_PROFILES = ("spark",)
+MUSE_DEFAULT_PROFILE = "spark"
+
 
 def resolve_model_effort(backend: str, profile: str, profile_explicit: bool,
                          model: str | None, effort: str | None) -> tuple[str | None, str | None]:
     env = load_models_env()
     if backend == "codex":
+        if profile not in PROFILES:
+            raise HerdError(2, f"codex profile must be one of {', '.join(PROFILES)}")
         key = profile.upper()
         model = model or env.get(f"DELEGATE_MODEL_{key}")
         effort = effort or env.get(f"DELEGATE_EFFORT_{key}", "high")
         if not model:
             raise HerdError(2, f"no model configured for profile {profile}")
         return model, effort
+    if backend == "muse":
+        prof = profile if profile_explicit else MUSE_DEFAULT_PROFILE
+        if prof not in MUSE_PROFILES:
+            raise HerdError(2, f"muse profile must be one of {', '.join(MUSE_PROFILES)}")
+        key = prof.upper().replace("-", "_")
+        model = model or env.get(f"DELEGATE_MUSE_MODEL_{key}")
+        effort = effort or env.get(f"DELEGATE_MUSE_EFFORT_{key}", "high")
+        if not model:
+            raise HerdError(2, f"no muse model configured for profile {prof}")
+        return model, effort
     if profile_explicit:
-        raise HerdError(2, f"--profile resolves a model only for codex; pass --model for --backend {backend}")
+        raise HerdError(2, f"--profile resolves a model only for codex and muse; "
+                           f"pass --model for --backend {backend}")
     return model, effort
 
 
@@ -760,7 +844,7 @@ def resolve_owner_filter(args: argparse.Namespace) -> str | None:
 
 def cmd_spawn(args: argparse.Namespace) -> int:
     if args.backend not in BACKENDS:
-        raise HerdError(2, f"unsupported backend: {args.backend} (codex or claude)")
+        raise HerdError(2, f"unsupported backend: {args.backend} ({', '.join(BACKENDS)})")
     access = args.access or ACCESS_BY_MODE[args.mode]
     if access not in PREAMBLE:
         raise HerdError(2, f"invalid access: {access}")
@@ -987,6 +1071,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "device_id": device_id(), "state_root": str(state_root()), "sessions_dir": str(sessions_dir()),
         "sessions_dir_exists": sessions_dir().is_dir(), "owner": owner_id(), "python": sys.version.split()[0],
         "codex_on_path": shutil.which("codex") is not None, "claude_on_path": shutil.which("claude") is not None,
+        "muse_on_path": shutil.which("muse") is not None,
         "models_env": str(KIT_ROOT / "config" / "models.env"),
         "default_stall_after_s": DEFAULT_STALL_AFTER_S, "default_deadline_s": DEFAULT_DEADLINE_S,
     }
@@ -1006,7 +1091,7 @@ def cmd_run_turn(args: argparse.Namespace) -> int:
 # CLI
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/claude).")
+    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/claude/muse).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_json(sp: argparse.ArgumentParser) -> None:
@@ -1025,7 +1110,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("mode", choices=list(ACCESS_BY_MODE))
     add_prompt(sp); add_deadlines(sp)
     sp.add_argument("--backend", default="codex")
-    sp.add_argument("--profile", default=DEFAULT_PROFILE, choices=list(PROFILES))
+    sp.add_argument("--profile", default=DEFAULT_PROFILE, choices=list(PROFILES) + list(MUSE_PROFILES))
     sp.add_argument("--model"); sp.add_argument("--effort")
     sp.add_argument("--access", "--sandbox", dest="access")
     sp.add_argument("--project-root", dest="project_root")
