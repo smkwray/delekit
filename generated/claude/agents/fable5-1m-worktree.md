@@ -1,8 +1,8 @@
 ---
-name: {{AGENT_NAME}}
-description: Read-write delegate — {{AGENT_PROFILE}} {{PROFILE_NOUN}} ({{PROFILE_HINT}}); isolated in its own Git worktree for parallel writers.
-model: {{AGENT_MODEL}}
-effort: {{PROFILE_EFFORT}}
+name: fable5-1m-worktree
+description: Read-write delegate — fable5-1m native model (Fable 5 at 1M context; fast wide-context sweeps and extraction); isolated in its own Git worktree for parallel writers.
+model: claude-fable-5[1m]
+effort: medium
 permissionMode: acceptEdits
 isolation: worktree
 hooks:

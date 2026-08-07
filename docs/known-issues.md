@@ -10,8 +10,10 @@ Platform tags: **[all]**, **[posix]** (macOS/Linux/git-bash), **[macos]**,
 
 | Symptom | Entry |
 |---|---|
-| A delegate ran on the wrong model, silently | [A misspelled spawn parameter silently downgrades a delegate](#a-misspelled-spawn-parameter-silently-downgrades-a-delegate-all) · [A delegate's own reply does not prove which model ran](#a-delegates-own-reply-does-not-prove-which-model-ran-all) |
-| A delegate ran at the wrong reasoning effort | [`effort: xhigh` on a subagent silently becomes `high`](#effort-xhigh-on-a-subagent-silently-becomes-high-all) |
+| A delegate ran on the wrong model, silently | [A `model` on a delegate spawn silently reroutes it](#a-model-on-a-delegate-spawn-silently-reroutes-it-all) · [A misspelled spawn parameter silently downgrades a delegate](#a-misspelled-spawn-parameter-silently-downgrades-a-delegate-all) · [A delegate's own reply does not prove which model ran](#a-delegates-own-reply-does-not-prove-which-model-ran-all) |
+| A delegate ran at the wrong reasoning effort | [`effort: xhigh` on a subagent (clamp fixed 2026-08)](#effort-xhigh-on-a-subagent-was-silently-high-fixed-all) |
+| A subagent needs more than 200k of context | [Native 1M delegates](#native-1m-delegates-opus5-1m-and-fable5-1m-all) |
+| Spawns refused with none running; `herd` still works | [Delegation stops mid-session at 200 spawns](#delegation-stops-mid-session-at-200-spawns-all) |
 | A setting you disabled globally is back in `ccg` | [The gateway profile does not inherit `~/.claude/settings.json`](#the-gateway-profile-does-not-inherit-claudesettingsjson-all) |
 | Sessions broke after picking a model in-session | [A `/model` pick inside a gateway session breaks every other session](#a-model-pick-inside-a-gateway-session-breaks-every-other-session-all) |
 | Context limit looks wrong (200k, or compacts early) | [Every model shows a 200k context limit](#every-model-shows-a-200k-context-limit-through-the-gateway-all) · [A `[1m]` parent that compacts at 650k](#a-1m-parent-that-compacts-at-650k-or-any-sub-1m-number-all) |
@@ -467,15 +469,25 @@ are actually running in. Check with `echo $CLAUDE_CONFIG_DIR`.
 
 ---
 
-## `effort: xhigh` on a subagent silently becomes `high` **[all]**
+## `effort: xhigh` on a subagent was silently `high` — fixed **[all]**
 
-**Symptom.** An agent file carries `effort: xhigh`. Nothing errors, the spawn
-works, and the file keeps reading `xhigh` forever — but the delegate reasons at
-`high`. Hit 2026-07-30 while evaluating a move to `xhigh` for the luna and terra
-profiles.
+> **Fixed upstream; re-measured 2026-08-06 on Claude Code 2.1.223.** With the
+> parent pinned to `--effort low`, a subagent declaring `effort: xhigh` now puts
+> `xhigh` on the wire, so it is neither clamped nor inherited. The native
+> profiles use it (`opus5-1m` runs `xhigh`). `DELEGATE_EFFORT_*` stays
+> restricted to low/medium/high/max, because those keys are *also* passed to the
+> `dairy`/`herd` backend CLIs, where the same word means something else — that
+> restriction is about the shared vocabulary, no longer about this clamp. The
+> history below is kept because the measurement method is what makes it
+> re-checkable after the next upgrade.
 
-**Cause.** Claude Code clamps `xhigh` to `high` **on the subagent path**. This is
-not a frontmatter parsing fault and not the gateway:
+**Original symptom.** An agent file carries `effort: xhigh`. Nothing errors, the
+spawn works, and the file keeps reading `xhigh` forever — but the delegate
+reasons at `high`. Hit 2026-07-30 while evaluating a move to `xhigh` for the luna
+and terra profiles.
+
+**Cause.** Claude Code clamped `xhigh` to `high` **on the subagent path**. This
+was not a frontmatter parsing fault and not the gateway:
 
 - The parent honours it. `claude -p --effort xhigh` puts `"effort": "xhigh"` on
   the wire, and the CLI validates the vocabulary (`--effort bogus` warns *"Valid
@@ -495,20 +507,34 @@ not a frontmatter parsing fault and not the gateway:
   max           ->     max
   ```
 
-**Fix.** Do not write `xhigh` in an agent file. `tools/render_config.py` rejects
-it in `DELEGATE_EFFORT_*` so this fails at render time instead of silently
-downgrading. Use `high`, or `max` when a profile genuinely warrants it.
+**Fix at the time.** Do not write `xhigh` in an agent file.
+`tools/render_config.py` rejects it in `DELEGATE_EFFORT_*` so this fails at
+render time instead of silently downgrading. Use `high`, or `max` when a profile
+genuinely warrants it. **Superseded** — see the note at the top of this entry;
+`DELEGATE_NATIVE_EFFORT_*` accepts `xhigh` today.
+
+**The 2026-08-06 re-measurement.** Same method, parent pinned `low`, subagent
+requests separated from parent ones by the `X-Claude-Code-Agent-Id` header
+(without that split the two are easy to confuse — a parent at `xhigh` makes
+every row look like `xhigh`):
+
+```text
+frontmatter          delegate request
+xhigh         ->     xhigh      <- no longer clamped
+max           ->     max
+medium        ->     medium
+```
 
 **Where effort actually rides.** `output_config.effort`, not a top-level field —
 grepping a request body for `"effort"` at the top level finds nothing and looks
 like effort was dropped entirely. `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1` (the
 launcher default) is what gets it sent for custom gateway aliases at all.
 
-**Re-test after a Claude Code upgrade.** If the clamp is a bug rather than a
-deliberate cap, `xhigh` becomes reachable and is worth revisiting for the luna
-profile specifically. The check is a pass-through logger reading
-`output_config.effort` on the delegate's request; the delegate's own answer
-cannot tell you, exactly as with the model identity below.
+**Re-test after a Claude Code upgrade.** It was a bug, and it was fixed — so the
+same check now guards against it *returning*. The check is a pass-through logger
+reading `output_config.effort` on the delegate's request, split from the parent's
+by `X-Claude-Code-Agent-Id`; the delegate's own answer cannot tell you, exactly
+as with the model identity below.
 
 **Scope.** This is the `tandy-*` path only. `dairy` and `herd` shell out to the
 backend CLI with `-c model_reasoning_effort=<level>`, where `xhigh` is accepted
@@ -657,6 +683,101 @@ vanished *after* you called it is the cooldown entry above, not this one.
 
 ---
 
+## A `model` on a delegate spawn silently reroutes it **[all]**
+
+**Symptom.** A delegate spawns, works, and reports normally — on the wrong
+model, billed to the wrong account, and without the worktree it asked for.
+Nothing errors. Hit 2026-07-29; found 2026-08-06 while investigating something
+else.
+
+**Scale when it went unnoticed.** One session, 200 spawns, **42 of them
+misrouted**:
+
+```text
+ 97  tandy-sol            spawn model=(none)  -> claude-sonnet-4-6-tandy-sol
+ 24  tandy-terra          spawn model=(none)  -> claude-sonnet-4-6-tandy-terra
+ 23  tandy-sol-readonly   spawn model=(none)  -> claude-sonnet-4-6-tandy-sol
+ 15  tandy-sol-worktree   spawn model=sonnet  -> claude-sonnet-5      <- misrouted
+ 15  tandy-sol            spawn model=sonnet  -> claude-sonnet-5      <- misrouted
+ 11  tandy-sol-readonly   spawn model=sonnet  -> claude-sonnet-5      <- misrouted
+```
+
+**Cause.** Model resolution is *per-invocation model* > *agent-file alias* >
+*parent*. The Agent tool's `model` field accepts only built-in names
+(sonnet/opus/haiku/fable), never a gateway alias — so any value there outranks
+the delegate's whole reason for existing. `claude-sonnet-4-6-tandy-*` is
+`owned_by=openai` and force-mapped to a GPT model on Codex quota;
+`claude-sonnet-5` has no alias entry and routes to the Claude OAuth credential.
+The 16 `-worktree` spawns also lost their isolation and wrote to the main
+checkout.
+
+**Why it stayed invisible.** The `tandy-*` name appears in the transcript, the
+UI, and the agent list either way. Only the wire model differs. A delegate's own
+reply cannot settle it (see below), and the `model: sonnet` field reads like a
+deliberate choice rather than an override.
+
+**Fix.** `bin/hooks/verify-delegate-spawn.py` check C denies any spawn that
+names a kit-managed agent *and* sets `model`. The hook existed when this
+happened — it had simply never been registered, so it protected nothing.
+`tools/seed_claude_context_cache.py` now registers it into the gateway profile
+on every launch, and `tools/verify_kit.py` fails when the live profile lacks it.
+A hook that is documented but unwired is not a control.
+
+**Confirming it yourself.** The spawn parameters and the wire model are recorded
+separately, so they can be compared after the fact:
+
+```bash
+D=<profile>/projects/<project>/<session-id>/subagents
+python3 - <<'PY'
+import json, glob, re, collections
+rows = collections.Counter()
+for meta in glob.glob("$D/*.meta.json"):
+    d = json.load(open(meta))
+    wire = set()
+    for line in open(meta.replace(".meta.json", ".jsonl"), errors="ignore"):
+        wire |= set(re.findall(r'"model":"([^"]*)"', line))
+    rows[(d.get("agentType"), d.get("model"), tuple(sorted(wire)))] += 1
+for k, v in rows.most_common(): print(v, k)
+PY
+```
+
+A row whose `agentType` is a delegate but whose wire model is not that
+delegate's alias is a misroute. The proxy request log is the independent
+witness: a genuine tandy call reaches the Codex upstream, a misrouted one does
+not appear there at all.
+
+---
+
+## Native 1M delegates: `opus5-1m` and `fable5-1m` **[all]**
+
+A subagent cannot borrow its parent's context window, so a 1M parent still gets
+200k delegates. These profiles exist for the case where the *input* is the
+problem — a file set or transcript too large for a 200k worker:
+
+```text
+opus5-1m[-readonly|-worktree]    claude-opus-5[1m]     effort xhigh
+fable5-1m[-readonly|-worktree]   claude-fable-5[1m]    effort medium
+```
+
+They are **not** `tandy-*`, deliberately: `tandy` means Codex-backed throughout
+this kit and in the `dairy`/`herd` profile vocabulary, and these run Anthropic
+models on Claude quota. Reach for one when the context genuinely demands it, not
+for bulk delegation.
+
+**The `[1m]` suffix is load-bearing and client-side.** Claude Code strips it
+before the wire but uses it to select the 1M window, so `claude-opus-5` and
+`claude-opus-5[1m]` are the same upstream model with different client
+behaviour — a bare `--model opus` resolves to the plain id and gives a silent
+200k session. Both ids must therefore exist in the catalog;
+`patches/cliproxy-claude-opus-5.patch` clones them. Unlike Fable, whose picker
+rows Claude Code collapses with a family-specific dedup, Opus uses the general
+comparator, so the Opus clone does produce a real "(1M context)" row.
+
+Verify with `--effort low` on the parent and a wire capture: the delegate's
+request should carry its own model and effort, not the parent's.
+
+---
+
 ## A misspelled spawn parameter silently downgrades a delegate **[all]**
 
 **Symptom.** A delegate appears to run, but on the session's own model, in the
@@ -668,21 +789,34 @@ set, and the spawn falls back to a generic subagent. The transcript looks
 normal.
 
 **Fix.** `bin/hooks/verify-delegate-spawn.py` is a PreToolUse hook that denies
-this shape. Register it against the `Agent` matcher:
+this shape. `tools/seed_claude_context_cache.py` registers it into the gateway
+profile on every `claudex` launch, so no manual step is needed; it adds to any
+existing `PreToolUse` list rather than replacing it, and repoints itself if the
+kit moves. To register it in another profile by hand:
 
 ```json
 {"hooks": {"PreToolUse": [{"matcher": "Agent", "hooks": [
   {"type": "command", "command": "python3 /path/to/bin/hooks/verify-delegate-spawn.py"}]}]}}
 ```
 
+Registration is the whole control: for five days this hook existed, was
+documented here, and was wired into nothing — during which 42 delegates ran off
+-profile (see the entry above). `tools/verify_kit.py` now fails when
+`CLAUDE_CONFIG_DIR` names a profile that lacks it.
+
 It runs three independent checks. The first two guard the `subject_type` typo,
 because whether the harness strips unknown keys before hooks run is undocumented:
 it denies a near-miss key name if one is visible, **and** denies any spawn whose
 prompt names a delegate while `subagent_type` is generic. The second check holds
-either way. The third denies a per-invocation `model` on a `tandy-*` spawn: the
-Agent tool's `model` slot only takes built-in names (sonnet/opus/haiku/fable) and
-outranks the agent's frontmatter alias, so a value there would silently route the
-delegate off its gateway profile.
+either way. The third denies a per-invocation `model` on a spawn that names any
+kit-managed agent: the Agent tool's `model` slot only takes built-in names
+(sonnet/opus/haiku/fable) and outranks the agent's frontmatter alias, so a value
+there would silently route the delegate off its profile.
+
+The managed set is read from `generated/claude/agents/` at hook time (via
+`DELEKIT_ROOT`, exported by the launchers), so adding or renaming a profile does
+not need a second list updated here — and the unprefixed native agents
+(`opus5-1m`, `fable5-1m`) are covered by the same checks as `tandy-*`.
 
 **Verifying by hand.** Ask the delegate to state its model. A real one answers
 with its gateway alias (`claude-delegate-*`); a silent fallback answers with the
@@ -692,3 +826,48 @@ provider request appears, no delegate ran.
 Note the contrast: naming the *right* parameter in a non-gateway session fails
 **loudly** ("issue with the selected model"). Only the parameter-name mistake is
 silent.
+
+---
+
+## Delegation stops mid-session at 200 spawns **[all]**
+
+**Symptom.** Partway through a long session every `Agent` spawn is refused with
+*"Subagent spawn limit reached (200 of 200 agents spawned)"* — including the
+first spawn of a given kind, and with **no delegates running**. `herd`/`dairy`
+delegation still works, so the session concludes the native path is broken for
+whichever model it happened to try next.
+
+**Cause.** `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` (default 200) caps *lifetime*
+spawns, not concurrent ones. The counter increments once per spawn and is never
+decremented, so finished delegates keep occupying their slot forever. It also
+increments *before* the agent launches, so a delegate that dies immediately — a
+502 on a stale alias, say — still consumes a slot permanently.
+
+Two things make this read as a model-specific failure when it is not:
+
+- The concurrency cap is a **different** check with a different message
+  (*"Concurrent subagent limit reached"*, `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`,
+  default 20). Seeing the lifetime message while nothing is running is expected.
+- `herd`/`dairy` keep working because they are external CLI processes launched
+  through the shell, not `Agent` spawns. They never touch the counter. So the
+  contrast between "native spawn fails, herd works" says nothing about models.
+
+**Fix.** The launchers set `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=1000`, with
+`device.env` free to override. This cannot rescue a session already in progress —
+the value is read at launch — so relaunch. Concurrency is unaffected, so the
+higher ceiling does not increase parallel load or rate-limit pressure.
+
+**Confirming it rather than guessing.** Each spawn writes a transcript pair into
+the session's `subagents/` directory, and the `.json` sidecar names the agent
+type. Count them:
+
+```bash
+D=~/.config/delekit/claude-profile/projects/<project>/<session-id>/subagents
+ls "$D"/*.jsonl | wc -l            # 200 means the cap is real, not spurious
+python3 -c "import json,glob,collections;print(collections.Counter(json.load(open(f))['agentType'] for f in glob.glob('$D/*.json')))"
+```
+
+**`/clear` is not a workaround.** It does reset the counter, but only when no
+non-exempt task entries remain registered; leftover background-agent entries
+block the reset. It also discards the conversation, which is usually the thing
+worth keeping.

@@ -22,6 +22,11 @@ def read_env() -> dict[str, str]:
     return env
 
 
+def native_profiles(env: dict[str, str]) -> list[str]:
+    return [item.strip() for item in env.get('DELEGATE_NATIVE_PROFILES', '').split(',')
+            if item.strip()]
+
+
 def agent_names(env: dict[str, str]) -> dict[str, str]:
     """Every generated agent name mapped to the alias it must declare."""
     prefix = env['AGENT_PREFIX']
@@ -31,6 +36,10 @@ def agent_names(env: dict[str, str]) -> dict[str, str]:
         alias = env[f'DELEGATE_ALIAS_{role}']
         for suffix in ('', '-worktree', '-readonly'):
             expected[f'{prefix}-{profile}{suffix}'] = alias
+    for profile in native_profiles(env):
+        alias = env[f'DELEGATE_NATIVE_ALIAS_{profile.upper().replace("-", "_")}']
+        for suffix in ('', '-worktree', '-readonly'):
+            expected[f'{profile}{suffix}'] = alias
     return expected
 
 
@@ -97,13 +106,60 @@ class RenderConfigTest(unittest.TestCase):
                 text = (AGENTS / f'{name}.md').read_text(encoding='utf-8')
                 self.assertIn(f'effort: {effort}\n', text, name)
 
-    def test_no_profile_requests_an_effort_subagents_cannot_receive(self) -> None:
-        # Claude Code clamps `xhigh` to `high` on the subagent path, so an agent
-        # file naming it reports an effort it never sends. Verified on the wire;
-        # see docs/known-issues.md. Render must fail rather than mislead.
+    def test_tandy_efforts_stay_within_the_shared_runner_vocabulary(self) -> None:
+        # DELEGATE_EFFORT_* is read by dairy/herd too, which pass it to a backend
+        # CLI where the vocabulary differs, so these keys stay restricted even
+        # though the subagent-path xhigh clamp has since been fixed upstream.
+        # Native (subagent-only) profiles are free to use xhigh; see
+        # test_native_profiles_may_use_xhigh and docs/known-issues.md.
         for role in ROLES:
             self.assertIn(self.env[f'DELEGATE_EFFORT_{role}'],
                           ('low', 'medium', 'high', 'max'), role)
+
+    def test_native_profiles_may_use_xhigh(self) -> None:
+        # Measured on the wire under Claude Code 2.1.223 with the parent pinned
+        # to `low`: a subagent declaring xhigh sends xhigh. Re-measure on upgrade.
+        sys.path.insert(0, str(ROOT / 'tools'))
+        from render_config import NATIVE_EFFORTS  # noqa: PLC0415
+        self.assertIn('xhigh', NATIVE_EFFORTS)
+        for profile in native_profiles(self.env):
+            effort = self.env[f'DELEGATE_NATIVE_EFFORT_{profile.upper().replace("-", "_")}']
+            self.assertIn(effort, NATIVE_EFFORTS, profile)
+            text = (AGENTS / f'{profile}.md').read_text(encoding='utf-8')
+            self.assertIn(f'effort: {effort}\n', text, profile)
+
+    def test_native_profiles_pin_a_suffixed_1m_alias(self) -> None:
+        # The [1m] suffix is what makes the agent get the 1M window: Claude Code
+        # strips it before the wire, so a plain id is a silent 200k session.
+        # Both ids must exist upstream; the cliproxy patch clones them.
+        profiles = native_profiles(self.env)
+        self.assertTrue(profiles, 'no native profiles configured')
+        for profile in profiles:
+            alias = self.env[f'DELEGATE_NATIVE_ALIAS_{profile.upper().replace("-", "_")}']
+            self.assertTrue(alias.endswith('[1m]'), f'{profile}: {alias}')
+            for suffix in ('', '-worktree', '-readonly'):
+                text = (AGENTS / f'{profile}{suffix}.md').read_text(encoding='utf-8')
+                self.assertIn(f'model: {alias}', text)
+
+    def test_native_agent_names_stay_out_of_the_alias_namespace(self) -> None:
+        # Claude Code's gateway discovery keeps ids beginning with `claude`, and
+        # an agent named like an alias makes spawn errors unreadable. The agent
+        # name is also the profile name here, so it has to be a legal one.
+        for profile in native_profiles(self.env):
+            self.assertFalse(profile.startswith('claude'), profile)
+            self.assertRegex(profile, r'^[a-z0-9]+(-[a-z0-9]+)*$')
+            self.assertFalse(profile.startswith(self.env['AGENT_PREFIX'] + '-'),
+                             f'{profile} implies a Codex-backed tandy profile')
+
+    def test_render_rejects_an_unconfigured_native_profile(self) -> None:
+        # A profile listed without its alias/hint/effort would otherwise render
+        # an agent with an empty model line and fail only at spawn time.
+        sys.path.insert(0, str(ROOT / 'tools'))
+        from render_config import parse_native  # noqa: PLC0415
+        with self.assertRaisesRegex(ValueError, 'DELEGATE_NATIVE_ALIAS_GHOST'):
+            parse_native({'DELEGATE_NATIVE_PROFILES': 'ghost'})
+        with self.assertRaisesRegex(ValueError, "must not start with 'claude'"):
+            parse_native({'DELEGATE_NATIVE_PROFILES': 'claude-thing'})
 
     def test_agent_bodies_are_lean(self) -> None:
         # These bodies are re-sent on every delegate invocation.
@@ -145,13 +201,19 @@ class RenderConfigTest(unittest.TestCase):
         for role in ROLES:
             self.assertIn(role.lower(), skill)
         self.assertIn(f'{prefix}-<profile>', skill)
-        # Model aliases legitimately start with `claude-`; agent names must not.
+        for profile in native_profiles(self.env):
+            self.assertIn(profile, skill, f'skill omits native profile {profile}')
+        # Every agent-shaped token must name something spawnable. Model aliases
+        # legitimately start with `claude-` and are exempt; a `<placeholder>`
+        # form stands for the family it templates.
         aliases = {self.env[f'DELEGATE_ALIAS_{r}'] for r in ROLES}
+        aliases |= {self.env[f'DELEGATE_NATIVE_ALIAS_{p.upper().replace("-", "_")}']
+                    for p in native_profiles(self.env)}
+        spawnable = set(agent_names(self.env))
         for token in re.findall(r'`([a-z0-9]+-[a-z0-9<>-]+)`', skill):
-            if token in aliases:
+            if token in aliases or '<' in token:
                 continue
-            self.assertEqual(token.split('-')[0], prefix,
-                             f'skill names a non-{prefix} agent: {token}')
+            self.assertIn(token, spawnable, f'skill names an unspawnable agent: {token}')
         self.assertNotRegex(skill, r'\bgpt-[A-Za-z0-9._-]+')
 
     def test_skill_requires_background_watchers_for_every_herd_turn(self) -> None:

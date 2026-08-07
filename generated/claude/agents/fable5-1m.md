@@ -1,8 +1,8 @@
 ---
-name: {{AGENT_NAME}}
-description: Read-write delegate — {{AGENT_PROFILE}} {{PROFILE_NOUN}} ({{PROFILE_HINT}}); works in the current checkout.
-model: {{AGENT_MODEL}}
-effort: {{PROFILE_EFFORT}}
+name: fable5-1m
+description: Read-write delegate — fable5-1m native model (Fable 5 at 1M context; fast wide-context sweeps and extraction); works in the current checkout.
+model: claude-fable-5[1m]
+effort: medium
 permissionMode: acceptEdits
 disallowedTools:
   - Agent

@@ -35,9 +35,52 @@ REQUIRED = [
     "AGENT_PREFIX",
 ]
 
-# Claude Code clamps `xhigh` to `high` on the subagent path, so a rendered agent
-# would claim an effort it never sends. Fail at render time instead.
+# DELEGATE_EFFORT_* is shared with the dairy/herd runners, which pass it to a
+# backend CLI where the vocabulary differs, so those keys stay restricted.
 EFFORTS = ("low", "medium", "high", "max")
+# Native profiles are subagent-only, and the clamp that silently rewrote xhigh
+# to high on that path is fixed as of Claude Code 2.1.223 (measured on the wire
+# with the parent pinned low). See docs/known-issues.md.
+NATIVE_EFFORTS = EFFORTS + ("xhigh",)
+
+# Native profiles run Anthropic models straight through the gateway, so they take
+# no oauth-model-alias entry and never appear in the proxy fragments. They carry
+# no AGENT_PREFIX: `tandy` means Codex-backed, and dairy/herd share that word.
+NATIVE_KEY = "DELEGATE_NATIVE_PROFILES"
+
+
+def native_key(profile: str) -> str:
+    """opus5-1m -> OPUS5_1M, the env-key spelling of a native profile name."""
+    return profile.upper().replace("-", "_")
+
+
+def parse_native(values: dict[str, str]) -> list[dict[str, str]]:
+    """Resolve DELEGATE_NATIVE_PROFILES into rendered-agent inputs."""
+    names = [item.strip() for item in values.get(NATIVE_KEY, "").split(",") if item.strip()]
+    if len(set(names)) != len(names):
+        raise ValueError(f"{NATIVE_KEY} lists a duplicate profile")
+    profiles: list[dict[str, str]] = []
+    for name in names:
+        # The agent name is the profile name, so it must be a legal one, and it
+        # must not collide with the alias namespace Claude Code filters on.
+        if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name):
+            raise ValueError(f"{NATIVE_KEY}: {name!r} is not a valid agent name")
+        if name.startswith("claude"):
+            raise ValueError(f"{NATIVE_KEY}: {name!r} must not start with 'claude'")
+        suffix = native_key(name)
+        entry = {"profile": name}
+        for field in ("ALIAS", "HINT", "EFFORT"):
+            key = f"DELEGATE_NATIVE_{field}_{suffix}"
+            if not values.get(key):
+                raise ValueError(f"{name} is listed in {NATIVE_KEY} but {key} is missing")
+            entry[field.lower()] = values[key]
+        if entry["effort"] not in NATIVE_EFFORTS:
+            raise ValueError(
+                f"DELEGATE_NATIVE_EFFORT_{suffix}={entry['effort']!r} is not one of "
+                + ", ".join(NATIVE_EFFORTS)
+            )
+        profiles.append(entry)
+    return profiles
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -97,18 +140,33 @@ def output_files(values: dict[str, str]) -> dict[Path, str]:
     # templates so a wording change does not have to be repeated per profile.
     capabilities = (("write", ""), ("worktree", "-worktree"), ("readonly", "-readonly"))
     prefix = values["AGENT_PREFIX"]
-    for role in ROLES:
-        profile = role.lower()
-        alias = values[f"DELEGATE_ALIAS_{role}"]
+
+    # (agent-name stem, alias, hint, effort, noun) for every rendered family.
+    # Tandy agents are prefixed and describe themselves as a "profile"; native
+    # ones are unprefixed and say "delegate", because their name is the profile.
+    families = [
+        (f"{prefix}-{role.lower()}", values[f"DELEGATE_ALIAS_{role}"],
+         values[f"DELEGATE_HINT_{role}"], values[f"DELEGATE_EFFORT_{role}"],
+         role.lower(), "profile")
+        for role in ROLES
+    ]
+    families += [
+        (native["profile"], native["alias"], native["hint"], native["effort"],
+         native["profile"], "native model")
+        for native in parse_native(values)
+    ]
+
+    for stem_name, alias, hint, effort, shown, noun in families:
         for stem, suffix in capabilities:
             template = TEMPLATE_DIR / f"{stem}.md.tmpl"
-            agent_name = f"{prefix}-{profile}{suffix}"
+            agent_name = f"{stem_name}{suffix}"
             local = dict(values)
             local["AGENT_NAME"] = agent_name
             local["AGENT_MODEL"] = alias
-            local["AGENT_PROFILE"] = profile
-            local["PROFILE_HINT"] = values[f"DELEGATE_HINT_{role}"]
-            local["PROFILE_EFFORT"] = values[f"DELEGATE_EFFORT_{role}"]
+            local["AGENT_PROFILE"] = shown
+            local["PROFILE_NOUN"] = noun
+            local["PROFILE_HINT"] = hint
+            local["PROFILE_EFFORT"] = effort
             destination = GENERATED_AGENT_DIR / f"{agent_name}.md"
             outputs[destination] = render_template(template.read_text(encoding="utf-8"), local)
 

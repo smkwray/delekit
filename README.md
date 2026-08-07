@@ -6,6 +6,9 @@ Delegate coding work from Claude Code or the terminal, on macOS and Windows:
   same session as a Claude parent, via a local
   [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) gateway.
   Interactive.
+- **`opus5-1m`, `fable5-1m`** — subagents on Anthropic models at the full 1M
+  context window, through the same gateway. For work whose *input* exceeds a
+  200k delegate.
 - **`dairy`** — a standalone CLI for one-shot, unattended, and CI jobs with
   Codex or Claude. No gateway required.
 - **`herd`** — detached, resumable, steerable headless workers with Codex or
@@ -19,18 +22,24 @@ paths create.
 ```text
 runtime-selected orchestrator (Opus, Sonnet, Fable — your choice)
         |
-        +-- tandy-<profile>             one writer in the current checkout
-        +-- tandy-<profile>-worktree    each simultaneous writer in its own worktree
-        +-- tandy-<profile>-readonly    read-only analysis and shell inspection
+        +-- <profile>             one writer in the current checkout
+        +-- <profile>-worktree    each simultaneous writer in its own worktree
+        +-- <profile>-readonly    read-only analysis and shell inspection
 
-profiles: terra (default), luna (fast/high-volume), sol (strongest)
+GPT via the gateway:  tandy-terra (default), tandy-luna (fast), tandy-sol (strongest)
+Anthropic at 1M:      opus5-1m (deep reasoning), fable5-1m (wide/fast)
 ```
 
 Every capability exists for every profile, so `tandy-luna-readonly` and
-`tandy-sol-worktree` are both valid. The agent definitions are capability
+`opus5-1m-worktree` are both valid. The agent definitions are capability
 boundaries, not personas — the task message defines the work. Multiple workers
 run under distinct runtime names, and the orchestrator can message or resume any
 of them by agent ID.
+
+The `opus5-1m` and `fable5-1m` profiles exist because a subagent cannot borrow
+its parent's context window: a 1M parent still gets 200k delegates. Use them when
+the *input* is the constraint. They deliberately drop the `tandy-` prefix, which
+means Codex-backed throughout this kit, and they spend Claude quota instead.
 
 `tandy` needs the gateway; `dairy`, `herd`, and `prune-worktrees` do not. If you
 only want direct CLI execution, install the kit and skip the gateway steps.
@@ -94,6 +103,10 @@ Change models by editing `config/models.env` and re-rendering — never by editi
 - Gateway aliases intentionally begin with `claude-`, because Claude Code filters
   gateway model discovery by that prefix.
 - Credentials live in one local `device.env` per machine, never in the repo.
+- A PreToolUse hook denies spawns that would silently run a delegate as
+  something else — chiefly a per-invocation `model`, which outranks the agent
+  file's alias. The launcher registers it every run, because a hook that is
+  documented but unwired protects nothing.
 - Tandy defaults to the dedicated `clientdata-272k` profile. The
   `native-200k` path remains an explicit compatibility fallback; revalidate the
   272k client behavior after Claude Code upgrades as described in

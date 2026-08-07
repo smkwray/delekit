@@ -16,11 +16,24 @@ Profiles: `terra` (default), `luna` (fast, high-volume),
 
 So `{{AGENT_PREFIX}}-luna-readonly` and `{{AGENT_PREFIX}}-sol-worktree` are both valid.
 
-Spawn with **`subagent_type: {{AGENT_PREFIX}}-<profile>[-capability]`**. That
-parameter name is load-bearing: the Agent tool ignores unrecognised parameters
-silently, so a typo like `subject_type` does not error — it drops you to a
-generic subagent on the session's own model, in the main checkout, with no
-worktree. Nothing in the transcript says so.
+Native profiles run Anthropic models at the full 1M window and carry no prefix,
+with the same three capabilities: `opus5-1m` (deep reasoning) and `fable5-1m`
+(fast wide-context sweeps). Reach for one when the input is too large for a 200k
+delegate — the parent cannot lend its own window to a subagent. They cost Claude
+quota rather than Codex quota, so they are not a drop-in for bulk tandy work.
+
+Spawn with **`subagent_type: <agent-name>`**. That parameter name is
+load-bearing: the Agent tool ignores unrecognised parameters silently, so a typo
+like `subject_type` does not error — it drops you to a generic subagent on the
+session's own model, in the main checkout, with no worktree. Nothing in the
+transcript says so.
+
+**Never pass `model` when you name a delegate.** The per-invocation model
+outranks the agent file's alias and only accepts built-in names, so it silently
+reroutes the delegate off its profile — wrong model, wrong quota, and no
+worktree isolation for an agent that asked for one. On 2026-07-29 this sent 42
+of 200 delegates to the wrong model without a single visible error. A PreToolUse
+hook now denies that shape; do not work around it.
 
 Verify rather than assume. A delegate asked to state its model answers with its
 gateway alias (`{{DELEGATE_ALIAS_TERRA}}` and friends); a silent fallback

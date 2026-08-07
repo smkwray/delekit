@@ -1,8 +1,8 @@
 ---
-name: {{AGENT_NAME}}
-description: Read-only delegate — {{AGENT_PROFILE}} {{PROFILE_NOUN}} ({{PROFILE_HINT}}); investigation and analysis, makes no changes.
-model: {{AGENT_MODEL}}
-effort: {{PROFILE_EFFORT}}
+name: fable5-1m-readonly
+description: Read-only delegate — fable5-1m native model (Fable 5 at 1M context; fast wide-context sweeps and extraction); investigation and analysis, makes no changes.
+model: claude-fable-5[1m]
+effort: medium
 permissionMode: plan
 tools:
   - Read

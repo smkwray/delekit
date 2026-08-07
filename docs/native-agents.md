@@ -38,12 +38,24 @@ there, so a profile is selected by spawning the agent type that carries it:
 ```text
 Use tandy-sol for the concurrency fix.
 Use tandy-luna for the mechanical rename.
+Use opus5-1m-readonly to audit the whole transcript at once.
 ```
+
+**Do not set `model` on such a spawn.** It outranks the frontmatter alias, so the
+delegate silently runs off-profile — wrong model, wrong quota, and no worktree
+for a `-worktree` agent. A PreToolUse hook denies it; the launcher registers that
+hook on every run. See
+[known-issues.md](known-issues.md#a-model-on-a-delegate-spawn-silently-reroutes-it-all).
 
 A generic subagent has no alias in its definition and therefore inherits the
 session model. If delegated work appears to run on the parent's model, check that
-a `tandy-*` agent type was actually requested. `claude-delegate-*` names a
+a kit agent type was actually requested. `claude-delegate-*` names a
 gateway model, never an agent; see [known-issues.md](known-issues.md).
+
+Two profile families exist. `tandy-terra|luna|sol` run GPT models on Codex quota
+and are the default choice. `opus5-1m` and `fable5-1m` run Anthropic models at
+the full 1M window on Claude quota — reach for those only when the input is too
+large for a 200k delegate, since a subagent never inherits its parent's window.
 
 Provider model IDs should not appear in task prompts. Invoke `/orchestrate-delegates` when the orchestrator needs the exact current alias names in context.
 

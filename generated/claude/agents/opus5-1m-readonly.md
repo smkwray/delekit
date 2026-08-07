@@ -1,8 +1,8 @@
 ---
-name: {{AGENT_NAME}}
-description: Read-only delegate — {{AGENT_PROFILE}} {{PROFILE_NOUN}} ({{PROFILE_HINT}}); investigation and analysis, makes no changes.
-model: {{AGENT_MODEL}}
-effort: {{PROFILE_EFFORT}}
+name: opus5-1m-readonly
+description: Read-only delegate — opus5-1m native model (Opus 5 at 1M context; deep reasoning over inputs too large for a 200k delegate); investigation and analysis, makes no changes.
+model: claude-opus-5[1m]
+effort: xhigh
 permissionMode: plan
 tools:
   - Read

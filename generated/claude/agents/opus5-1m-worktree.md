@@ -1,8 +1,8 @@
 ---
-name: {{AGENT_NAME}}
-description: Read-write delegate — {{AGENT_PROFILE}} {{PROFILE_NOUN}} ({{PROFILE_HINT}}); isolated in its own Git worktree for parallel writers.
-model: {{AGENT_MODEL}}
-effort: {{PROFILE_EFFORT}}
+name: opus5-1m-worktree
+description: Read-write delegate — opus5-1m native model (Opus 5 at 1M context; deep reasoning over inputs too large for a 200k delegate); isolated in its own Git worktree for parallel writers.
+model: claude-opus-5[1m]
+effort: xhigh
 permissionMode: acceptEdits
 isolation: worktree
 hooks:

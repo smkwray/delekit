@@ -60,6 +60,16 @@ The launcher removes `CLAUDE_CODE_SUBAGENT_MODEL`. Current Claude Code then reso
 
 The per-invocation choice persists when that worker receives follow-up messages or resumes.
 
+**Never supply (1) for a kit agent.** That slot accepts only built-in names — never a gateway alias — so any value there overrides the profile the agent name selected: wrong model, wrong quota, and no worktree isolation for a `-worktree` agent, all without an error. A PreToolUse hook denies it; see [known-issues.md](known-issues.md#a-model-on-a-delegate-spawn-silently-reroutes-it-all) for the session where this misrouted 42 of 200 delegates.
+
+## Native 1M profiles
+
+`DELEGATE_NATIVE_PROFILES` in `config/models.env` renders unprefixed agents that run Anthropic models straight through the gateway — `opus5-1m` and `fable5-1m`, each with the same three capabilities. They take no `oauth-model-alias` entry, so they never appear in the proxy fragments; the alias is the model id itself.
+
+Their aliases end in `[1m]`, which is a *client-side* marker: Claude Code uses it to select the 1M window and strips it before the wire. So `claude-opus-5` and `claude-opus-5[1m]` are one upstream model with two client behaviours, both ids must exist in the catalog, and a bare `opus` silently means 200k. `patches/cliproxy-claude-opus-5.patch` clones them.
+
+These profiles may set `xhigh` effort, which `DELEGATE_EFFORT_*` may not — see [Effort](#effort).
+
 ## Effort
 
 Agent files carry `effort:` from `DELEGATE_EFFORT_<PROFILE>` in
@@ -73,9 +83,13 @@ has no `effort` parameter, so that second half was never true: every profile
 simply ran at whatever the session was set to, and the profile choice moved only
 the model.
 
-`xhigh` is rejected at render time. Claude Code clamps it to `high` for
-subagents, so an agent file naming it would report an effort it never sends — see
-[known-issues.md](known-issues.md). Effort travels as `output_config.effort`.
+`xhigh` is rejected at render time **for `DELEGATE_EFFORT_*`** — not because of
+the old subagent clamp (fixed upstream; re-measured 2026-08-06 on Claude Code
+2.1.223), but because those keys are also passed to the `dairy`/`herd` backend
+CLIs, where the vocabulary differs. `DELEGATE_NATIVE_EFFORT_*` is subagent-only
+and does accept `xhigh`; `opus5-1m` uses it. Effort travels as
+`output_config.effort` — see [known-issues.md](known-issues.md) for the wire
+capture and how to re-check it after an upgrade.
 
 The launcher defaults `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1`, which tells current Claude Code to send effort for custom gateway model IDs while still excluding known incompatible Claude models. Override it in the local `device.env` only after testing a provider that rejects the parameter.
 
