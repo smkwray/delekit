@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'claude', 'muse', 'agy')]
+    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy')]
     [string]$Backend,
 
     [string]$Profile,
@@ -86,7 +86,7 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'claude', 'muse', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
 $ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
@@ -94,9 +94,9 @@ if (-not $Profile -and $env:DELEGATE_PROFILE) {
     $Profile = $env:DELEGATE_PROFILE
     $ProfileExplicit = $true
 }
-if ($Backend -eq 'codex') {
+if ($Backend -in @('codex', 'pi')) {
     if (-not $Profile) { $Profile = 'terra' }
-    if ($Profile -notin @('terra', 'luna', 'sol')) { throw 'Codex profile must be terra, luna, or sol' }
+    if ($Profile -notin @('terra', 'luna', 'sol')) { throw "$Backend profile must be terra, luna, or sol" }
 } elseif ($Backend -eq 'muse') {
     if (-not $Profile) { $Profile = 'spark' }
     if ($Profile -notin @('spark')) { throw 'muse profile must be spark' }
@@ -116,9 +116,16 @@ if ($Backend -eq 'codex') {
         throw 'agy profile must be flash-high, flash-low, or pro-high'
     }
 } elseif ($ProfileExplicit) {
-    throw "-Profile resolves a model only for the codex and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
+    throw "-Profile resolves a model only for the codex, pi, muse, and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
 } else {
     $Profile = ''
+}
+
+if ($Backend -eq 'pi' -and $Access -eq 'workspace-write') {
+    throw 'pi has no confined workspace-write mode. Run pi with readonly, or full for explicit unrestricted access; use codex/claude for confined writes.'
+}
+if ($Backend -eq 'pi' -and $Fast) {
+    throw '-Fast is a Codex backend option and is not supported by pi.'
 }
 
 # agy has no Codex-style filesystem sandbox: headless agy is either plan
@@ -144,7 +151,7 @@ if ($PromptFile) {
 if ([string]::IsNullOrWhiteSpace($TaskPrompt)) { throw 'Task prompt is empty.' }
 
 $profileUpper = $Profile.Replace('-', '_').ToUpperInvariant()
-if ($Backend -eq 'codex') {
+if ($Backend -in @('codex', 'pi')) {
     if (-not $Model) { $Model = $Config["DELEGATE_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No model configured for profile $Profile" }
     if (-not $Effort) { $Effort = Get-ConfigValue -Key "DELEGATE_EFFORT_$profileUpper" -Default 'high' }
@@ -223,6 +230,9 @@ if (-not $NoPreamble) {
         'workspace-write' { $parts.Add('**Access: workspace-write.** Work only inside the current project or worktree. Return outcome, changed files, validation, and blockers in the final message.') }
         'danger-full-access' { $parts.Add('**Access: unrestricted and explicitly authorized for this run.** Minimize changes outside the project and report every external effect.') }
     }
+    if ($Backend -eq 'pi' -and $Access -eq 'read-only') {
+        $parts.Add('**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.')
+    }
     if ($Worktree) { $parts.Add('**Isolation: Git worktree.** Stay in the current worktree; do not switch branches, touch the main checkout, push, merge, or remove the worktree.') }
 }
 $parts.Add($TaskPrompt)
@@ -300,6 +310,19 @@ try {
             else { $arguments += @('--sandbox', $Access, '-c', 'approval_policy=never') }
             $ComposedPrompt | & codex @arguments - 1> $StdoutLog 2> $StderrLog
             $ExitCode = $LASTEXITCODE
+        }
+        'pi' {
+            # Pi has no filesystem sandbox. Read-only removes shell and write
+            # tools; workspace-write is refused above, while full is explicit.
+            # Ambient add-ons stay off, but project context files still load.
+            $arguments = @('--provider', 'openai-codex', '--model', $Model, '--thinking', $Effort,
+                '--no-approve', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-session')
+            if ($Access -eq 'read-only') { $arguments += @('--tools', 'read,grep,find,ls') }
+            $arguments += '-p'
+            Push-Location $ExecutionRoot
+            try { $ComposedPrompt | & pi @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally { Pop-Location }
+            if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
         'claude' {
             $permissionMode = switch ($Access) { 'read-only' { 'plan' }; 'workspace-write' { 'acceptEdits' }; default { 'bypassPermissions' } }

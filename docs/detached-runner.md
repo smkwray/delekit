@@ -1,7 +1,7 @@
 # herd — detached delegate workers
 
 **`herd`** spawns and herds detached headless workers: fire-and-forget agents on
-Codex or Claude that keep running after the command returns, and that you can
+Codex, Pi, Claude, or Muse that keep running after the command returns, and that you can
 check on, steer, and resume later — with no gateway and no Claude session.
 
 ## What it is
@@ -14,11 +14,11 @@ The missing delegation quadrant. Today delekit covers three:
 | resumable/steerable/detached | `tandy` (native)             | **`herd`** ← this      |
 
 `herd` gives you **detached, resumable, steerable** headless workers on Codex,
-Claude, or Muse, with **no gateway** and **no Claude session** — drivable from a
+Pi, Claude, or Muse, with **no gateway** and **no Claude session** — drivable from a
 bare terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
 sibling of `tandy`, and the steerable sibling of `dairy`.
 
-Backends: **codex, claude, and muse.** (No grok, no gemini, no Antigravity
+Backends: **codex, pi, claude, and muse.** (No grok, no gemini, no Antigravity
 (`agy`) for the detached path — their headless CLIs emit no streaming JSON or
 session id we can scrape to observe activity and resume. `agy` print mode (`-p`)
 returns only the final plain-text answer, with no event stream and no resume
@@ -157,8 +157,8 @@ herd prune  [--apply] [--idle-min N] [--any-owner]   GC terminal+idle dirs (dry-
 herd doctor                                   env / dirs / backend checks
 ```
 
-Core opts mirror `dairy`: `--backend codex|claude|muse`, `--profile`
-(backend-specific, resolved from `config/models.env`: codex takes
+Core opts mirror `dairy`: `--backend codex|pi|claude|muse`, `--profile`
+(backend-specific, resolved from `config/models.env`: codex and pi take
 `terra|luna|sol` with `terra` default, muse takes `spark`), `--model`,
 `--effort`, `--access`/`--sandbox`, `--worktree` + `--dirty-policy` +
 `--no-auto-commit`, `--no-preamble`, `--json`. Access→sandbox/permission mapping
@@ -178,14 +178,19 @@ so it keeps driving the window it opened instead of starting blind.
 
 ## Backend adapters
 
-Both stream JSON so we can scrape the session id and observe activity live —
-this is the one place we *cannot* reuse `dairy`, which uses `--output-format
-text` and passes `--no-session-persistence`.
+All four stream JSON so we can capture the session id and observe activity live.
+Unlike `dairy`'s backend-specific one-shot paths, every `herd` adapter must
+persist and recover a resumable session handle.
 
 - **codex**
   - spawn:  `codex exec --json --cd <root> --model <m> -c model_reasoning_effort=<e> [--sandbox <a> -c approval_policy=never | --dangerously-bypass-approvals-and-sandbox]`
   - resume: `codex exec resume <session_id> --json ...`
   - parse: `session_id` / thread from the event stream; last agent message; event time.
+- **pi**
+  - spawn: `pi --mode json --provider openai-codex --session-dir <task>/pi-session ...`
+  - resume: the same command plus `--session-id <session_id>`.
+  - read-only exposes only `read,grep,find,ls`; workspace-write is refused because Pi has no sandbox; full is unrestricted.
+  - ambient extensions, skills, and prompt templates are disabled; project context files still load. Pi has no separate reasoning stream, so `peek --thinking` stays empty.
 - **claude**
   - spawn:  `claude -p --output-format stream-json --verbose --permission-mode <p> --add-dir <root> [--model <m>] [--effort <e>]`
   - resume: `claude -p --resume <session_id> --output-format stream-json ...`
@@ -213,7 +218,7 @@ tools/delegate_supervisor.py          the supervisor (stdlib only)
 bin/herd.sh  bin/herd.ps1             thin shims on PATH (wired by the installers)
 tests/test_delegate_supervisor.py     reaper / prune / list / kill against fixtures
 tests/test_delegate_backends.py       spawn/result/send/stall via a fake backend
-tests/fake_backend.py                 a controllable codex/claude/muse stand-in, no network
+tests/fake_backend.py                 a controllable codex/pi/claude/muse stand-in, no network
 docs/detached-runner.md               this doc
 ```
 
@@ -224,10 +229,9 @@ speak one profile vocabulary.
 ## Testing
 
 `python3 -m unittest tests.test_delegate_supervisor tests.test_delegate_backends`.
-The backend tests point `DELEGATE_CODEX_BIN` / `DELEGATE_CLAUDE_BIN` /
-`DELEGATE_MUSE_BIN` at
+The backend tests point the `DELEGATE_*_BIN` overrides at
 `tests/fake_backend.py`, which emits each backend's streaming-JSON schema, so the
 full detach → capture-session → report → resume path runs with no network. The
 provider event schemas the adapters parse are the integration boundary to
-re-verify after a Codex or Claude CLI upgrade.
+re-verify after a backend CLI upgrade.
 ```

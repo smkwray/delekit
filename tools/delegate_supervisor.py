@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """herd: detached, resumable, steerable headless delegate workers.
 
-Backends: codex, claude, muse.
+Backends: codex, pi, claude, muse.
 
 Stdlib only. See docs/detached-runner.md for the design. This is the shared
 cross-platform core; bin/herd.sh and bin/herd.ps1 are thin shims onto it.
@@ -314,6 +314,55 @@ class CodexBackend(Backend):
         return out
 
 
+class PiBackend(Backend):
+    """Pi coding agent using the ChatGPT-backed ``openai-codex`` provider.
+
+    Pi has no filesystem sandbox. Read-only therefore removes shell and write
+    tools; workspace-write is rejected before task state is created. Full mode
+    is deliberately unrestricted. Ambient Pi extensions, skills, and prompt
+    templates are disabled so headless jobs stay deterministic and lean, while
+    project context files such as AGENTS.md still load normally.
+    """
+
+    name = "pi"
+    bin_env = "DELEGATE_PI_BIN"
+
+    def sandbox_args(self, access: str) -> list[str]:
+        if access == "read-only":
+            return ["--tools", "read,grep,find,ls"]
+        if access == "danger-full-access":
+            return []
+        raise HerdError(2, "pi has no confined workspace-write mode; use readonly or explicit full")
+
+    def _base(self, meta: dict[str, Any]) -> list[str]:
+        session_dir = task_dir(meta["task"]) / "pi-session"
+        argv = [self.locate_bin(), "--mode", "json", "--provider", "openai-codex",
+                "--model", meta["model"], "--thinking", meta["effort"],
+                "--session-dir", str(session_dir), "--no-approve", "--no-extensions",
+                "--no-skills", "--no-prompt-templates"]
+        argv += self.sandbox_args(meta["access"])
+        return argv
+
+    def spawn_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta), meta["prompt"], meta["exec_root"]
+
+    def resume_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        argv = self._base(meta) + ["--session-id", meta["session_id"]]
+        return argv, meta["prompt"], meta["exec_root"]
+
+    def parse(self, obj: dict[str, Any]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if obj.get("type") == "session" and isinstance(obj.get("id"), str):
+            out["session_id"] = obj["id"]
+        if obj.get("type") == "message_end":
+            message = obj.get("message")
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                text = _text_from_content(message.get("content"))
+                if text:
+                    out["message"] = text
+        return out
+
+
 class ClaudeBackend(Backend):
     name = "claude"
     bin_env = "DELEGATE_CLAUDE_BIN"
@@ -416,7 +465,9 @@ class MuseBackend(Backend):
         return out
 
 
-BACKENDS: dict[str, Backend] = {"codex": CodexBackend(), "claude": ClaudeBackend(), "muse": MuseBackend()}
+BACKENDS: dict[str, Backend] = {
+    "codex": CodexBackend(), "pi": PiBackend(), "claude": ClaudeBackend(), "muse": MuseBackend(),
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -718,6 +769,7 @@ PREAMBLE = {
     "danger-full-access": "**Access: unrestricted and explicitly authorized for this run.** Minimize changes outside the project and report every external effect.",
 }
 WORKTREE_LINE = "**Isolation: Git worktree.** Stay in the current worktree; do not switch branches, touch the main checkout, push, merge, or remove the worktree."
+PI_READONLY_LINE = "**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive."
 
 
 def find_project_root(start: str) -> str:
@@ -769,9 +821,9 @@ MUSE_DEFAULT_PROFILE = "spark"
 def resolve_model_effort(backend: str, profile: str, profile_explicit: bool,
                          model: str | None, effort: str | None) -> tuple[str | None, str | None]:
     env = load_models_env()
-    if backend == "codex":
+    if backend in ("codex", "pi"):
         if profile not in PROFILES:
-            raise HerdError(2, f"codex profile must be one of {', '.join(PROFILES)}")
+            raise HerdError(2, f"{backend} profile must be one of {', '.join(PROFILES)}")
         key = profile.upper()
         model = model or env.get(f"DELEGATE_MODEL_{key}")
         effort = effort or env.get(f"DELEGATE_EFFORT_{key}", "high")
@@ -848,6 +900,10 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     access = args.access or ACCESS_BY_MODE[args.mode]
     if access not in PREAMBLE:
         raise HerdError(2, f"invalid access: {access}")
+    if args.backend == "pi" and access == "workspace-write":
+        raise HerdError(2, "pi has no confined workspace-write mode; use readonly, or full for explicit unrestricted access")
+    if args.backend == "pi" and args.fast:
+        raise HerdError(2, "--fast is a Codex backend option and is not supported by pi")
     prompt = resolve_prompt(args)
     if not prompt.strip():
         raise HerdError(2, "task prompt is empty")
@@ -870,7 +926,11 @@ def cmd_spawn(args: argparse.Namespace) -> int:
 
     composed = prompt
     if not args.no_preamble:
-        head = PREAMBLE[access] + ("\n\n" + WORKTREE_LINE if worktree else "")
+        head = PREAMBLE[access]
+        if args.backend == "pi" and access == "read-only":
+            head += "\n\n" + PI_READONLY_LINE
+        if worktree:
+            head += "\n\n" + WORKTREE_LINE
         composed = head + "\n\n" + prompt
 
     tdir.mkdir(parents=True, exist_ok=True)
@@ -1067,10 +1127,26 @@ def cmd_prune(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    pi_bin = shutil.which("pi")
+    pi_auth_ready = False
+    pi_auth_status = "pi-not-found"
+    if pi_bin:
+        try:
+            proc = subprocess.run(
+                [pi_bin, "auth", "check", "--provider", "openai-codex", "--json", "--no-refresh"],
+                capture_output=True, text=True, timeout=15,
+            )
+            data = json.loads(proc.stdout) if proc.stdout.strip() else {}
+            pi_auth_status = str(data.get("status", f"exit-{proc.returncode}"))
+            pi_auth_ready = proc.returncode == 0 and pi_auth_status == "ready"
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            pi_auth_status = type(exc).__name__
     checks = {
         "device_id": device_id(), "state_root": str(state_root()), "sessions_dir": str(sessions_dir()),
         "sessions_dir_exists": sessions_dir().is_dir(), "owner": owner_id(), "python": sys.version.split()[0],
-        "codex_on_path": shutil.which("codex") is not None, "claude_on_path": shutil.which("claude") is not None,
+        "codex_on_path": shutil.which("codex") is not None, "pi_on_path": pi_bin is not None,
+        "pi_chatgpt_auth_ready": pi_auth_ready, "pi_chatgpt_auth_status": pi_auth_status,
+        "claude_on_path": shutil.which("claude") is not None,
         "muse_on_path": shutil.which("muse") is not None,
         "models_env": str(KIT_ROOT / "config" / "models.env"),
         "default_stall_after_s": DEFAULT_STALL_AFTER_S, "default_deadline_s": DEFAULT_DEADLINE_S,
@@ -1091,7 +1167,7 @@ def cmd_run_turn(args: argparse.Namespace) -> int:
 # CLI
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/claude/muse).")
+    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/pi/claude/muse).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_json(sp: argparse.ArgumentParser) -> None:

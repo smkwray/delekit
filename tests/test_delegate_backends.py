@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Step-2+ tests: backend adapters, the detached turn helper, spawn/result/send.
 
-No network. A fake codex/claude/muse CLI (tests/fake_backend.py) is pointed at via
-the DELEGATE_CODEX_BIN / DELEGATE_CLAUDE_BIN / DELEGATE_MUSE_BIN overrides, so
+No network. A fake codex/pi/claude/muse CLI (tests/fake_backend.py) is pointed at via
+the backend executable overrides, so
 spawn runs the real detached helper against a controllable JSON event stream.
 """
 import contextlib
@@ -40,6 +40,7 @@ class Base(unittest.TestCase):
         st = os.stat(FAKE)
         os.chmod(FAKE, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         os.environ["DELEGATE_CODEX_BIN"] = str(FAKE)
+        os.environ["DELEGATE_PI_BIN"] = str(FAKE)
         os.environ["DELEGATE_CLAUDE_BIN"] = str(FAKE)
         os.environ["DELEGATE_MUSE_BIN"] = str(FAKE)
 
@@ -47,7 +48,8 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
         self.proj.cleanup()
         for k in ("DELEGATE_STATE_DIR", "DELEKIT_DEVICE_ID", "DELEGATE_CODEX_BIN",
-                  "DELEGATE_CLAUDE_BIN", "DELEGATE_MUSE_BIN", "FAKE_HANG", "FAKE_DELAY_S"):
+                  "DELEGATE_PI_BIN", "DELEGATE_CLAUDE_BIN", "DELEGATE_MUSE_BIN",
+                  "FAKE_HANG", "FAKE_DELAY_S"):
             os.environ.pop(k, None)
 
     def wait_done(self, task, timeout=20.0):
@@ -59,8 +61,8 @@ class Base(unittest.TestCase):
             time.sleep(0.1)
         return False
 
-    def spawn(self, *extra, prompt="do the thing", name="t1", backend="codex"):
-        argv = ["spawn", "workspace", prompt, "--json", "--project-root", self.proj.name,
+    def spawn(self, *extra, prompt="do the thing", name="t1", backend="codex", mode="workspace"):
+        argv = ["spawn", mode, prompt, "--json", "--project-root", self.proj.name,
                 "--model", "m", "--name", name, "--backend", backend,
                 "--no-preamble", "--stall-after", "60", "--deadline", "600", *extra]
         return quiet_main(argv)
@@ -85,6 +87,20 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(b.parse({"type": "result", "result": "final"}).get("message"), "final")
         asst = {"type": "assistant", "message": {"content": [{"type": "text", "text": "mid"}]}}
         self.assertEqual(b.parse(asst).get("message"), "mid")
+
+    def test_pi_parser_session_and_final_message(self):
+        b = ds.BACKENDS["pi"]
+        self.assertEqual(b.parse({"type": "session", "id": "s-pi"}).get("session_id"), "s-pi")
+        event = {"type": "message_end", "message": {"role": "assistant",
+                 "content": [{"type": "text", "text": "final"}]}}
+        self.assertEqual(b.parse(event).get("message"), "final")
+
+    def test_pi_access_mapping(self):
+        b = ds.BACKENDS["pi"]
+        self.assertEqual(b.sandbox_args("read-only"), ["--tools", "read,grep,find,ls"])
+        self.assertEqual(b.sandbox_args("danger-full-access"), [])
+        with self.assertRaises(ds.HerdError):
+            b.sandbox_args("workspace-write")
 
     def test_muse_parser_session_and_terminal_text(self):
         b = ds.BACKENDS["muse"]
@@ -131,6 +147,27 @@ class TestSpawnResult(Base):
         payload = ds.reconcile(ds.task_dir("cl"))
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], "sess-fake-0001")
+
+    def test_pi_spawn_runs_and_reports(self):
+        self.spawn(name="pi", backend="pi", mode="readonly")
+        self.assertTrue(self.wait_done("pi"))
+        payload = ds.reconcile(ds.task_dir("pi"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertIn("do the thing", (ds.task_dir("pi") / "report.md").read_text())
+
+    def test_pi_default_preamble_discloses_missing_shell(self):
+        quiet_main(["spawn", "readonly", "inspect", "--json", "--project-root", self.proj.name,
+                    "--model", "m", "--name", "pi-pre", "--backend", "pi",
+                    "--stall-after", "60", "--deadline", "600"])
+        self.assertTrue(self.wait_done("pi-pre"))
+        prompt = (ds.task_dir("pi-pre") / "prompt.md").read_text()
+        self.assertIn("no shell or test execution", prompt)
+
+    def test_pi_workspace_is_refused_before_state(self):
+        rc = self.spawn(name="pi-ws", backend="pi")
+        self.assertEqual(rc, 2)
+        self.assertFalse(ds.task_dir("pi-ws").exists())
 
     def test_muse_spawn_runs_and_reports(self):
         self.spawn(name="ms", backend="muse")
@@ -190,6 +227,16 @@ class TestSendResume(Base):
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], "sess-fake-0001")
         self.assertIn("resumed:", (ds.task_dir("mr") / "report.md").read_text())
+
+    def test_pi_send_resumes_via_session_id(self):
+        self.spawn(prompt="first turn", name="pr", backend="pi", mode="readonly")
+        self.assertTrue(self.wait_done("pr"))
+        self.assertEqual(quiet_main(["send", "pr", "second turn", "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("pr"))
+        payload = ds.reconcile(ds.task_dir("pr"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertIn("resumed:", (ds.task_dir("pr") / "report.md").read_text())
 
     def test_send_without_session_is_error(self):
         # Fabricate a task that never captured a session id.

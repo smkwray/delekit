@@ -119,6 +119,50 @@ assert os.path.isfile(obj['report']), obj
 assert 'no valid final report' in open(obj['report'], encoding='utf-8').read().lower()
 PY_EMPTY
 
+# Pi uses the shared Codex profiles through the ChatGPT-backed provider. Its
+# honest read-only mode removes shell/write tools and disables ambient add-ons.
+cat > "$TMP/fake-bin/pi" <<'FAKE_PI'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$PI_ARGS"
+cat > "$PI_STDIN"
+printf 'fake pi completed\n'
+FAKE_PI
+chmod +x "$TMP/fake-bin/pi"
+
+XDG_STATE_HOME="$TMP/pi-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  PI_ARGS="$TMP/pi.args" PI_STDIN="$TMP/pi.stdin" \
+  "$ROOT/bin/dairy.sh" read --backend pi --profile luna --project-root "$TMP/repo" \
+  --prompt 'pi smoke' --json > "$TMP/pi.json"
+
+python3 - "$TMP/pi.json" "$TMP/pi.args" "$TMP/pi.stdin" <<'PY_PI'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'completed' and obj['backend'] == 'pi', obj
+assert obj['profile'] == 'luna' and obj['model'] and obj['access'] == 'read-only', obj
+assert 'fake pi completed' in open(obj['report'], encoding='utf-8').read(), obj
+args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]
+for expected in ('--provider', 'openai-codex', '--no-approve', '--no-extensions',
+                 '--no-skills', '--no-prompt-templates', '--no-session', '--tools',
+                 'read,grep,find,ls', '-p'):
+    assert expected in args, (expected, args)
+prompt=open(sys.argv[3], encoding='utf-8').read()
+assert 'no shell or test execution' in prompt
+assert prompt.rstrip().endswith('pi smoke')
+PY_PI
+
+# Pi has no write sandbox, so workspace-write fails before logs/worktrees.
+set +e
+XDG_STATE_HOME="$TMP/pi-ws-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" workspace --backend pi --project-root "$TMP/repo" \
+  --prompt 'nope' --worktree 2> "$TMP/pi-ws.err"
+pi_ws_rc=$?
+set -e
+[[ "$pi_ws_rc" -eq 2 ]]
+grep -q 'no confined workspace-write' "$TMP/pi-ws.err"
+[[ ! -e "$TMP/pi-ws-state" ]]
+[[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
+
 # Antigravity (agy) backend: access maps to --mode, the prompt is the value of
 # -p (not stdin), and stdout is captured as the report. A fake agy records its
 # argv so the mapping is asserted without a real model.

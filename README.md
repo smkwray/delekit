@@ -10,11 +10,11 @@ Delegate coding work from Claude Code or the terminal, on macOS and Windows:
   context window, through the same gateway. For work whose *input* exceeds a
   200k delegate.
 - **`dairy`** — a standalone CLI for one-shot, unattended, and CI jobs with
-  Codex or Claude. No gateway required.
-- **`herd`** — detached, resumable, steerable headless workers with Codex or
-  Claude: spawn returns immediately, and you check on, steer, resume, or kill
-  the worker later. No gateway, no Claude session. State is device-local and
-  never synced.
+  Codex, Pi, Claude, Muse, or Antigravity. No gateway required.
+- **`herd`** — detached, resumable, steerable headless workers with Codex, Pi,
+  Claude, or Muse: spawn returns immediately, and you check on, steer, resume,
+  or kill the worker later. No gateway, no Claude session. State is
+  device-local and never synced.
 
 Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees these
 paths create.

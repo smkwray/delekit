@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""A fake codex/claude/muse CLI for herd tests. No network.
+"""A fake codex/pi/claude/muse CLI for herd tests. No network.
 
 Detects which backend it is impersonating from argv (codex uses `exec` with a
-`-` stdin prompt, claude uses `-p`, muse uses `--prompt-file`) and emits that
+`-` stdin prompt, pi uses `--mode json`, claude uses `-p`, muse uses
+`--prompt-file`) and emits that
 backend's streaming-JSON event schema, then exits.
 
 Env knobs:
@@ -29,6 +30,7 @@ def muse_envelope(payload_type, payload, sid):
 
 def main():
     argv = sys.argv[1:]
+    is_pi = "--mode" in argv and argv[argv.index("--mode") + 1] == "json"
     is_claude = "-p" in argv
     is_muse = "--prompt-file" in argv
     is_resume = ("resume" in argv) or ("--resume" in argv) or ("--session-id" in argv)
@@ -42,7 +44,9 @@ def main():
         prompt = sys.stdin.read()
     first_line = (prompt.strip().splitlines() or [""])[-1][:80]
 
-    if is_claude:
+    if is_pi:
+        emit({"type": "session", "version": 3, "id": sid})
+    elif is_claude:
         emit({"type": "system", "subtype": "init", "session_id": sid})
     elif is_muse:
         emit(muse_envelope("run.lifecycle.started", {"kind": "run_started"}, sid))
@@ -64,7 +68,10 @@ def main():
     else:
         body = "did: " + first_line
 
-    if is_claude:
+    if is_pi:
+        emit({"type": "message_end", "message": {"role": "assistant",
+              "content": [{"type": "text", "text": body}]}})
+    elif is_claude:
         emit({"type": "assistant", "session_id": sid,
               "message": {"content": [{"type": "text", "text": body}]}})
         emit({"type": "result", "subtype": "success", "session_id": sid, "result": body})
