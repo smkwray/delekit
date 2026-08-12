@@ -147,7 +147,12 @@ def seed_attribution(config_dir: Path) -> bool:
 
 
 def hook_command(kit_root: Path) -> str:
-    return f"python3 {kit_root / HOOK_SCRIPT}"
+    # Persist a POSIX-style path so the command string is portable and, crucially,
+    # so is_ours()/the matcher (which look for the forward-slash HOOK_SCRIPT
+    # substring) detect a prior registration on Windows. Without this, kit_root /
+    # HOOK_SCRIPT emits backslashes on Windows, the dedup check never matches its
+    # own entry, and the hook is duplicated on every gateway launch. No-op on POSIX.
+    return f"python3 {(kit_root / HOOK_SCRIPT).as_posix()}"
 
 
 def patch_hooks(document: dict[str, Any], kit_root: Path) -> dict[str, Any]:
@@ -168,8 +173,11 @@ def patch_hooks(document: dict[str, Any], kit_root: Path) -> dict[str, Any]:
     def is_ours(entry: Any) -> bool:
         if not isinstance(entry, dict):
             return False
-        return any(isinstance(inner, dict) and HOOK_SCRIPT in str(inner.get("command", ""))
-                   for inner in entry.get("hooks", []) or [])
+        return any(
+            isinstance(inner, dict)
+            and HOOK_SCRIPT in str(inner.get("command", "")).replace("\\", "/")
+            for inner in entry.get("hooks", []) or []
+        )
 
     ours = {"matcher": HOOK_MATCHER,
             "hooks": [{"type": "command", "command": command}]}

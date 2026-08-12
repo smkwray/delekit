@@ -204,6 +204,42 @@ class SeedContextCacheTest(unittest.TestCase):
             self.assertEqual(len(ours), 1)
             self.assertIn("/moved", ours[0]["hooks"][0]["command"])
 
+    def test_spawn_hook_migrates_duplicate_legacy_windows_paths(self) -> None:
+        # Released Windows registrations used backslashes. Match both spellings
+        # so an upgrade removes every stale copy before installing the new path.
+        with tempfile.TemporaryDirectory() as raw:
+            config_dir = Path(raw)
+            settings_path = config_dir / SETTINGS_FILE
+            unrelated = {"matcher": "Bash",
+                         "hooks": [{"type": "command", "command": "audit.py"}]}
+            legacy = [
+                {"matcher": HOOK_MATCHER,
+                 "hooks": [{"type": "command",
+                            "command": r"python3 C:\old\kit\bin\hooks\verify-delegate-spawn.py"}]},
+                {"matcher": HOOK_MATCHER,
+                 "hooks": [{"type": "command",
+                            "command": r"python3 D:\older\kit\bin\hooks\verify-delegate-spawn.py"}]},
+            ]
+            settings_path.write_text(json.dumps({
+                "theme": "dark", "hooks": {HOOK_EVENT: [unrelated, *legacy]},
+            }), encoding="utf-8")
+
+            new_root = Path("/new/kit")
+            self.assertTrue(seed_hooks(config_dir, new_root))
+            document = json.loads(settings_path.read_text(encoding="utf-8"))
+            entries = document["hooks"][HOOK_EVENT]
+            self.assertEqual(len(entries), 2)
+            self.assertIn(unrelated, entries)
+            ours = self._spawn_hooks(document)
+            self.assertEqual(len(ours), 1)
+            command = ours[0]["hooks"][0]["command"]
+            self.assertIn("/new/kit", command)
+            self.assertNotIn("\\", command)
+
+            first_mtime = settings_path.stat().st_mtime_ns
+            self.assertFalse(seed_hooks(config_dir, new_root))
+            self.assertEqual(settings_path.stat().st_mtime_ns, first_mtime)
+
     def test_seed_refuses_malformed_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             state_path = Path(raw) / ".claude.json"
