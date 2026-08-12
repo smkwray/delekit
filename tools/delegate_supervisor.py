@@ -656,7 +656,7 @@ def run_turn(task: str, mode: str) -> int:
     stderr_f = open(tdir / "stderr.log", "ab")
     proc = subprocess.Popen(
         argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr_f,
-        cwd=cwd, env=env, text=True, bufsize=1,
+        cwd=cwd, env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
         **_child_popen_kwargs(new_process_group=True),
     )
     atomic_write_json(tdir / "child.json", {
@@ -709,6 +709,8 @@ def run_turn(task: str, mode: str) -> int:
                 last_message = parsed["message"]
 
     rc = proc.wait()
+    proc.stdout.close()
+    stderr_f.close()
     watcher.join(timeout=2)
     if last_message is not None:
         (tdir / "report.md").write_text(last_message, encoding="utf-8")

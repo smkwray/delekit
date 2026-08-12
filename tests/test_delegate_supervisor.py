@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -53,6 +54,93 @@ class Base(unittest.TestCase):
         import io
         with contextlib.redirect_stdout(io.StringIO()):
             return ds.main(argv)
+
+
+class ProbeBackend(ds.Backend):
+    """Byte-level backend used to test the turn helper's text-pipe boundary."""
+
+    name = "probe"
+
+    def __init__(self, script):
+        self.script = script
+
+    def spawn_cmd(self, meta):
+        return [sys.executable, "-c", self.script], meta["prompt"], meta["exec_root"]
+
+    resume_cmd = spawn_cmd
+
+    def parse(self, obj):
+        return {key: obj[key] for key in ("session_id", "message")
+                if isinstance(obj.get(key), str)}
+
+
+class TestTurnEncoding(Base):
+    def run_probe(self, task, prompt, script):
+        tdir = ds.sessions_dir() / task
+        tdir.mkdir(parents=True)
+        ds.atomic_write_json(tdir / "meta.json", {
+            "task": task, "state": "working", "backend": "probe", "model": "m",
+            "access": "workspace-write", "exec_root": self.tmp.name, "repo": self.tmp.name,
+            "owner": self.owner, "prompt": prompt, "session_id": None,
+            "created_utc": ds.now(), "deadline_utc": ds.now() + 30,
+            "stall_after_s": 30, "auto_commit": False,
+        })
+        with mock.patch.dict(ds.BACKENDS, {"probe": ProbeBackend(script)}):
+            self.assertEqual(ds.run_turn(task, "spawn"), 0)
+        return tdir
+
+    def test_run_turn_encodes_prompt_as_utf8(self):
+        prompt = "input \u2014 and \u2192"
+        script = r"""
+import json
+import sys
+
+prompt = sys.stdin.buffer.read().decode("utf-8")
+event = json.dumps({"session_id": "probe-session", "message": prompt}).encode("ascii")
+sys.stdout.buffer.write(event + b"\n")
+sys.stdout.buffer.flush()
+"""
+        real_popen = subprocess.Popen
+        with mock.patch.object(ds.subprocess, "Popen", wraps=real_popen) as popen:
+            tdir = self.run_probe("utf8-prompt", prompt, script)
+        self.assertEqual(popen.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(popen.call_args.kwargs["errors"], "replace")
+        self.assertEqual((tdir / "report.md").read_text(encoding="utf-8"), prompt)
+
+    def test_run_turn_decodes_utf8_events_without_mojibake(self):
+        message = "I\u2019ve resumed \u2014 \u2192 \u00e9 \U0001f600"
+        script = r"""
+import json
+import sys
+
+sys.stdin.buffer.read()
+message = "I\u2019ve resumed \u2014 \u2192 \u00e9 \U0001f600"
+event = json.dumps({"message": message}, ensure_ascii=False).encode("utf-8")
+sys.stdout.buffer.write(event + b"\n")
+sys.stdout.buffer.flush()
+"""
+        tdir = self.run_probe("utf8-events", "prompt", script)
+        self.assertEqual((tdir / "report.md").read_text(encoding="utf-8"), message)
+        self.assertEqual(json.loads((tdir / "events.jsonl").read_text(encoding="utf-8"))["message"],
+                         message)
+
+    def test_run_turn_replaces_malformed_byte_and_keeps_reading(self):
+        script = r"""
+import json
+import sys
+
+sys.stdin.buffer.read()
+sys.stdout.buffer.write(b'{"message":"bad \x81 byte"}\n')
+final = json.dumps({"message": "final " + chr(0x2014)}, ensure_ascii=False).encode("utf-8")
+sys.stdout.buffer.write(final + b"\n")
+sys.stdout.buffer.flush()
+"""
+        tdir = self.run_probe("malformed-event", "prompt", script)
+        events = (tdir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(json.loads(events[0])["message"], "bad \ufffd byte")
+        self.assertEqual(json.loads(events[1])["message"], "final \u2014")
+        self.assertEqual((tdir / "report.md").read_text(encoding="utf-8"), "final \u2014")
+        self.assertEqual(ds.read_json(tdir / "meta.json")["state"], "done")
 
 
 class TestReconcile(Base):
