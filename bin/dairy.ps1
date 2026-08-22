@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy')]
+    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy', 'opencode')]
     [string]$Backend,
 
     [string]$Profile,
@@ -86,7 +86,7 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy', 'opencode')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
 $ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
@@ -115,8 +115,22 @@ if ($Backend -in @('codex', 'pi')) {
     if ($Profile -notin @('flash-high', 'flash-low', 'pro-high')) {
         throw 'agy profile must be flash-high, flash-low, or pro-high'
     }
+} elseif ($Backend -eq 'opencode') {
+    # The profile set is data: DELEGATE_OPENCODE_PROFILES in config/models.env IS
+    # the list and its first entry is the default. An empty list is valid and
+    # means -Model is required, exactly like the claude backend.
+    $opencodeProfiles = @(
+        ([string]$Config['DELEGATE_OPENCODE_PROFILES']) -split ',' |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    )
+    if (-not $Profile) {
+        $Profile = if ($opencodeProfiles.Count) { $opencodeProfiles[0] } else { '' }
+    } elseif ($Profile -notin $opencodeProfiles) {
+        $listed = if ($opencodeProfiles.Count) { $opencodeProfiles -join ', ' } else { '<none configured>' }
+        throw "opencode profile must be one of: $listed. Set DELEGATE_OPENCODE_PROFILES in config/models.env, or pass -Model."
+    }
 } elseif ($ProfileExplicit) {
-    throw "-Profile resolves a model only for the codex, pi, muse, and agy backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
+    throw "-Profile resolves a model only for the codex, pi, muse, agy, and opencode backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
 } else {
     $Profile = ''
 }
@@ -126,6 +140,16 @@ if ($Backend -eq 'pi' -and $Access -eq 'workspace-write') {
 }
 if ($Backend -eq 'pi' -and $Fast) {
     throw '-Fast is a Codex backend option and is not supported by pi.'
+}
+
+# Opencode's write confinement is a heuristic on the bash command string, not a
+# filesystem boundary, so there is no confined write mode to label. Refuse it as
+# for pi and agy.
+if ($Backend -eq 'opencode' -and $Access -eq 'workspace-write') {
+    throw 'opencode has no confined workspace-write mode: its shell writes outside --dir. Run opencode with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes.'
+}
+if ($Backend -eq 'opencode' -and $Fast) {
+    throw '-Fast is a Codex backend option and is not supported by opencode.'
 }
 
 # agy has no Codex-style filesystem sandbox: headless agy is either plan
@@ -159,6 +183,75 @@ if ($Backend -in @('codex', 'pi')) {
     if (-not $Model) { $Model = $Config["DELEGATE_MUSE_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No muse model configured for profile $Profile" }
     if (-not $Effort) { $Effort = Get-ConfigValue -Key "DELEGATE_MUSE_EFFORT_$profileUpper" -Default 'high' }
+} elseif ($Backend -eq 'opencode') {
+    if ($Profile) {
+        if (-not $Model) { $Model = $Config["DELEGATE_OPENCODE_MODEL_$profileUpper"] }
+        if (-not $Effort) { $Effort = [string]$Config["DELEGATE_OPENCODE_VARIANT_$profileUpper"] }
+    }
+    if (-not $Model) {
+        throw 'No opencode model: pass -Model, or set DELEGATE_OPENCODE_PROFILES and DELEGATE_OPENCODE_MODEL_* in config/models.env.'
+    }
+    # Honor DELEGATE_OPENCODE_MIN_VERSION here too: a knob only herd enforces is a
+    # knob that silently does nothing for half the kit.
+    if (-not $DryRun) {
+        $Python = @('py', 'python', 'python3') |
+            Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
+        # Fail CLOSED: skipping the check because Python is missing would silently
+        # ignore a floor the operator deliberately configured. Only an empty floor
+        # means "no check".
+        if (-not $Python) {
+            $configuredFloor = [string]$Config['DELEGATE_OPENCODE_MIN_VERSION']
+            if ($configuredFloor.Trim()) {
+                throw "DELEGATE_OPENCODE_MIN_VERSION=$configuredFloor is set but Python 3 is unavailable to verify it. Install Python 3 or clear the floor."
+            }
+        }
+        if ($Python) {
+            $verChk = @'
+import sys
+sys.path.insert(0, sys.argv[1] + "/tools")
+import delegate_supervisor as ds
+try:
+    ds.require_opencode_version(ds.BACKENDS["opencode"].locate_bin())
+except ds.HerdError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(7)
+'@
+            # $ErrorActionPreference is 'Stop' here, which turns any native
+            # stderr write into a terminating error and would kill the intended
+            # diagnostic. Relax it, capture what the child said, and report THAT
+            # -- a bad DELEGATE_OPENCODE_BIN is not a version-floor violation.
+            $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            try { $verOut = ($verChk | & $Python - $KitRoot 2>&1 | Out-String) }
+            finally { $ErrorActionPreference = $prevEap }
+            if ($LASTEXITCODE -ne 0) { throw "opencode preflight failed: $($verOut.Trim())" }
+        }
+    }
+    # Opencode ignores an unknown --variant in silence and there is no universal
+    # vocabulary, so an effort is checked against the model's declared variants
+    # by the shared supervisor helper, so both runners agree.
+    if ($Effort -and -not $DryRun) {
+        $Python = @('py', 'python', 'python3') |
+            Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } |
+            Select-Object -First 1
+        if (-not $Python) { throw 'Python 3 is required to validate an opencode effort.' }
+        $checker = @'
+import sys
+sys.path.insert(0, sys.argv[1] + "/tools")
+import delegate_supervisor as ds
+try:
+    ds.validate_opencode_effort(ds.BACKENDS["opencode"].locate_bin(), sys.argv[2], sys.argv[3])
+except ds.HerdError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(2)
+'@
+        # Same treatment as the version preflight: $ErrorActionPreference is
+        # 'Stop' here, which turns a native stderr write into a terminating error
+        # and would kill the intended diagnostic.
+        $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $effOut = ($checker | & $Python - $KitRoot $Model $Effort 2>&1 | Out-String) }
+        finally { $ErrorActionPreference = $prevEap }
+        if ($LASTEXITCODE -ne 0) { throw "opencode effort check failed: $($effOut.Trim())" }
+    }
 } elseif ($Backend -eq 'agy') {
     # agy slugs bake the effort tier into the name, so a profile resolves to a full
     # agy slug and no separate -Effort is sent. -Model overrides for a single run.
@@ -230,6 +323,9 @@ if (-not $NoPreamble) {
         'workspace-write' { $parts.Add('**Access: workspace-write.** Work only inside the current project or worktree. Return outcome, changed files, validation, and blockers in the final message.') }
         'danger-full-access' { $parts.Add('**Access: unrestricted and explicitly authorized for this run.** Minimize changes outside the project and report every external effect.') }
     }
+    if ($Backend -eq 'opencode' -and $Access -eq 'read-only') {
+        $parts.Add('**Opencode limitation:** Read-only opencode has file/search tools but no shell, so it cannot run git, ripgrep, or tests. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.')
+    }
     if ($Backend -eq 'pi' -and $Access -eq 'read-only') {
         $parts.Add('**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.')
     }
@@ -270,13 +366,34 @@ if ($DryRun) {
     exit 0
 }
 
-if (-not (Get-Command $Backend -ErrorAction SilentlyContinue)) { throw "$Backend CLI not found in PATH." }
+# Honour the per-backend binary override before falling back to PATH. A valid
+# DELEGATE_<BACKEND>_BIN pointing at a build deliberately not on PATH was
+# rejected here with "CLI not found", even though the run would have used it.
+$backendBinVar = "DELEGATE_$($Backend.Replace('-','_').ToUpperInvariant())_BIN"
+$BackendBin = [Environment]::GetEnvironmentVariable($backendBinVar, 'Process')
+if ($BackendBin) {
+    if (-not (Test-Path -LiteralPath $BackendBin -PathType Leaf)) {
+        throw "$backendBinVar=$BackendBin is not an executable file."
+    }
+} else {
+    # Resolve ONE application here and use it for every backend branch below.
+    # -CommandType Application excludes functions and aliases, so the access
+    # boundary cannot change with caller command precedence. npm ships both
+    # `opencode` and `opencode.cmd`, so prefer a real Windows executable
+    # extension and take exactly one.
+    $cands = @(Get-Command $Backend -CommandType Application -ErrorAction SilentlyContinue)
+    if (-not $cands.Count) { throw "$Backend CLI not found in PATH (or set $backendBinVar)." }
+    $pick = $cands | Where-Object { $_.Source -match '\.(cmd|bat|exe)$' } | Select-Object -First 1
+    if (-not $pick) { $pick = $cands | Select-Object -First 1 }
+    $BackendBin = $pick.Source
+}
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $ttlText = Get-ConfigValue -Key 'RUNNER_LOG_TTL_DAYS' -Default '7'
 $ttl = 0
 if (-not [int]::TryParse($ttlText, [ref]$ttl) -or $ttl -lt 0) { throw 'RUNNER_LOG_TTL_DAYS must be a nonnegative integer.' }
 Get-ChildItem -LiteralPath $LogDir -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match '\.(stdout|stderr)\.log$' -and $_.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddDays(-$ttl) } |
+    Where-Object { ($_.Name -match '\.(stdout|stderr)\.log$' -or $_.Name -match '\.opencode\.db(-wal|-shm)?$') -and
+                   $_.LastWriteTimeUtc -lt [DateTime]::UtcNow.AddDays(-$ttl) } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($Worktree) {
@@ -308,7 +425,7 @@ try {
             $arguments += @('--skip-git-repo-check', '--color', 'never', '-o', $ReportFile)
             if ($Access -eq 'danger-full-access') { $arguments += '--dangerously-bypass-approvals-and-sandbox' }
             else { $arguments += @('--sandbox', $Access, '-c', 'approval_policy=never') }
-            $ComposedPrompt | & codex @arguments - 1> $StdoutLog 2> $StderrLog
+            $ComposedPrompt | & $BackendBin @arguments - 1> $StdoutLog 2> $StderrLog
             $ExitCode = $LASTEXITCODE
         }
         'pi' {
@@ -320,7 +437,7 @@ try {
             if ($Access -eq 'read-only') { $arguments += @('--tools', 'read,grep,find,ls') }
             $arguments += '-p'
             Push-Location $ExecutionRoot
-            try { $ComposedPrompt | & pi @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            try { $ComposedPrompt | & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
@@ -330,7 +447,7 @@ try {
             if ($Model) { $arguments += @('--model', $Model) }
             if ($Effort) { $arguments += @('--effort', $Effort) }
             Push-Location $ExecutionRoot
-            try { $ComposedPrompt | & claude @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            try { $ComposedPrompt | & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
@@ -351,13 +468,71 @@ try {
                 'danger-full-access' { $arguments += '--yolo' }
             }
             $arguments += @('--prompt-file', $PromptLog)
-            # Resolve the application explicitly: an interactive profile may define
-            # a `muse` function, and dairy's access boundary must not depend on
-            # caller command precedence.
-            $museExecutable = (Get-Command muse.exe -CommandType Application -ErrorAction Stop).Source
             Push-Location $ExecutionRoot
-            try { & $museExecutable @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            try { & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
+            if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
+        }
+        'opencode' {
+            # Opencode CLI, headless `run`: the final answer is plain text on
+            # stdout, so stdout is the report exactly as for pi/claude/muse/agy.
+            # herd uses --format json instead, because it needs the event stream.
+            #
+            # The prompt is piped in, and stdin reaching EOF is load-bearing:
+            # `opencode run` reads stdin, so a stdin that never closes makes the
+            # run hang with no output and no timeout of its own.
+            #
+            # Access is enforced by environment. Read-only denies by default and
+            # allows back only the read surface -- enumerating write tools is not
+            # a boundary, because opencode leaves unlisted keys at allow. The
+            # rule-ARRAY form that `opencode debug agent` prints is silently
+            # ignored and fails OPEN. workspace-write was refused earlier.
+            # A delekit-owned agent carries the policy; an agent's own
+            # permission block is merged after the top-level one and the last
+            # match wins, so an ordinary global agent config would outrank it.
+            $ocAgent = if ($Access -eq 'read-only') { 'delekit-readonly' } else { 'delekit-full' }
+            $ocConfig = if ($Access -eq 'read-only') { '{"agent": {"delekit-readonly": {"mode": "primary", "permission": {"*": "deny", "read": {"*": "allow", "mcp:*": "deny"}, "glob": "allow", "grep": "allow"}}}}' } else { '{"agent": {"delekit-full": {"mode": "primary", "permission": {"*": "allow"}}}}' }
+            $arguments = @('--pure', 'run', '--agent', $ocAgent, '--dir', $ExecutionRoot, '--model', $Model)
+            if ($Effort) { $arguments += @('--variant', $Effort) }
+            $arguments += '--auto'
+            # npm installs opencode as opencode.cmd/.ps1 on Windows, so an
+            # `opencode.exe` lookup fails outright. -CommandType Application
+            # still excludes functions and aliases, so the access boundary does
+            # not depend on caller command precedence. DELEGATE_OPENCODE_BIN
+            # overrides, matching herd.
+            $priorEnv = @{}
+            foreach ($n in @('OPENCODE_PERMISSION','OPENCODE_DISABLE_PROJECT_CONFIG','OPENCODE_DB',
+                             'OPENCODE_CONFIG','OPENCODE_CONFIG_CONTENT','OPENCODE_AUTH_CONTENT')) {
+                $priorEnv[$n] = [Environment]::GetEnvironmentVariable($n, 'Process')
+            }
+            $env:OPENCODE_PERMISSION = if ($Access -eq 'read-only') {
+                # mcp:* deny FOLLOWS the read allow: last matching rule wins.
+                '{"*":"deny","read":{"*":"allow","mcp:*":"deny"},"glob":"allow","grep":"allow"}'
+            } else { '{"*":"allow"}' }
+            $env:OPENCODE_CONFIG_CONTENT = $ocConfig
+            $env:OPENCODE_DISABLE_PROJECT_CONFIG = '1'
+            $env:OPENCODE_DB = "$prefix.opencode.db"
+            foreach ($n in @('OPENCODE_CONFIG','OPENCODE_AUTH_CONTENT')) {
+                Remove-Item "Env:\$n" -ErrorAction SilentlyContinue
+            }
+            # opencode writes ANSI escapes to stderr even under NO_COLOR, and this
+            # script runs with $ErrorActionPreference='Stop', which turns any
+            # native stderr write into a TERMINATING error -- the run died with
+            # the escape sequence as its message before producing a report.
+            # Native stderr is data here, not a failure signal; the exit code is
+            # the failure signal.
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            Push-Location $ExecutionRoot
+            try { $ComposedPrompt | & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally {
+                $ErrorActionPreference = $prevEap
+                Pop-Location
+                foreach ($n in $priorEnv.Keys) {
+                    if ($null -eq $priorEnv[$n]) { Remove-Item "Env:\$n" -ErrorAction SilentlyContinue }
+                    else { Set-Item "Env:\$n" $priorEnv[$n] }
+                }
+            }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
         'agy' {
@@ -375,12 +550,8 @@ try {
             if ($Model) { $arguments += @('--model', $Model) }
             if ($Effort) { $arguments += @('--effort', $Effort) }
             $arguments += @('-p', $ComposedPrompt)
-            # Resolve the application explicitly. An interactive PowerShell profile
-            # may define an `agy` function with extra flags; dairy's access boundary
-            # must not change according to caller command precedence.
-            $agyExecutable = (Get-Command agy.exe -CommandType Application -ErrorAction Stop).Source
             Push-Location $ExecutionRoot
-            try { & $agyExecutable @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            try { & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
@@ -410,7 +581,9 @@ if ($invalidReport) {
 $HeadSha = ''
 $Commits = ''
 if ($Worktree -and (Test-Path -LiteralPath $WorktreeDir)) {
-    if (-not $NoAutoCommit) {
+    # Commit only a turn that actually succeeded; this used to run regardless of
+    # exit code, committing partial work under a failed status.
+    if (-not $NoAutoCommit -and $ExitCode -eq 0) {
         & git -C $WorktreeDir add -A *> $null
         & git -C $WorktreeDir diff --cached --quiet
         if ($LASTEXITCODE -ne 0) {
@@ -468,5 +641,7 @@ else {
     }
 }
 
-try { [Console]::Beep(880, 120) } catch {}
+# Opt-in, exactly as the macOS notification in dairy.sh is: an unattended or CI
+# run must not make noise merely because it finished.
+if ($env:DELEGATE_DESKTOP_NOTIFY -eq '1') { try { [Console]::Beep(880, 120) } catch {} }
 exit $ExitCode

@@ -40,11 +40,12 @@ Prompt input (choose one):
   --prompt-stdin           read task from stdin (also automatic for piped stdin)
 
 Core options:
-  --backend NAME           codex (default), pi, claude, muse, or agy
+  --backend NAME           codex (default), pi, claude, muse, agy, or opencode
   --profile NAME           backend-specific model profile from config/models.env:
                            codex/pi: terra (default), luna, sol
                            muse: spark (default)
                            agy: flash-high (default), flash-low, pro-high
+                           opencode: from DELEGATE_OPENCODE_PROFILES (first = default)
   --model ID               explicit per-run override; REQUIRED for --backend claude,
                            which has no profile mapping
   --effort LEVEL           explicit reasoning effort override
@@ -135,7 +136,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$BACKEND" in codex|pi|claude|muse|agy) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
+case "$BACKEND" in codex|pi|claude|muse|agy|opencode) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
 
@@ -153,8 +154,25 @@ elif [[ "$BACKEND" == "agy" ]]; then
     sol) echo "Deprecated agy profile sol; use pro-high." >&2; PROFILE="pro-high" ;;
   esac
   case "$PROFILE" in flash-high|flash-low|pro-high) ;; *) echo "agy profile must be flash-high, flash-low, or pro-high" >&2; exit 2 ;; esac
+elif [[ "$BACKEND" == "opencode" ]]; then
+  # The profile set is data: DELEGATE_OPENCODE_PROFILES in config/models.env IS
+  # the list and its first entry is the default. An empty list is valid and means
+  # --model is required, exactly like the claude backend.
+  oc_profiles=""
+  IFS=',' read -r -a oc_raw <<< "${DELEGATE_OPENCODE_PROFILES:-}"
+  for oc_name in "${oc_raw[@]:-}"; do
+    oc_name="${oc_name//[[:space:]]/}"
+    [[ -n "$oc_name" ]] && oc_profiles="${oc_profiles}${oc_name} "
+  done
+  if [[ -z "$PROFILE" ]]; then
+    PROFILE="${oc_profiles%% *}"
+  elif [[ " $oc_profiles" != *" $PROFILE "* ]]; then
+    echo "opencode profile must be one of: ${oc_profiles:-<none configured>}" >&2
+    echo "Set DELEGATE_OPENCODE_PROFILES in config/models.env, or pass --model." >&2
+    exit 2
+  fi
 elif [[ "$PROFILE_EXPLICIT" -eq 1 ]]; then
-  echo "--profile resolves a model only for the codex, pi, muse, and agy backends; config/models.env holds their IDs." >&2
+  echo "--profile resolves a model only for the codex, pi, muse, agy, and opencode backends; config/models.env holds their IDs." >&2
   echo "For --backend $BACKEND, pass --model explicitly." >&2
   exit 2
 else
@@ -176,6 +194,20 @@ fi
 # (unrestricted and NOT workspace-confined). It cannot honor a confined
 # workspace-write, so refuse it up front rather than granting host-wide writes
 # under a "workspace" label.
+# Opencode's write confinement is a heuristic on the bash command string, not a
+# filesystem boundary: measured identically on two models, `echo X > /abs/outside`
+# is allowed while `cd /outside && echo X > f` is rejected. There is no confined
+# write mode to label, so refuse it as for pi and agy.
+if [[ "$BACKEND" == "opencode" && "$ACCESS" == "workspace-write" ]]; then
+  echo "opencode has no confined workspace-write mode: its shell writes outside --dir." >&2
+  echo "Run opencode with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
+  exit 2
+fi
+if [[ "$BACKEND" == "opencode" && "$FAST" -eq 1 ]]; then
+  echo "--fast is a Codex backend option and is not supported by opencode." >&2
+  exit 2
+fi
+
 if [[ "$BACKEND" == "agy" && "$ACCESS" != "read-only" && "$ACCESS" != "danger-full-access" ]]; then
   echo "agy has no confined workspace-write mode: headless agy is either plan (read-only) or" >&2
   echo "--dangerously-skip-permissions (unrestricted, not workspace-confined)." >&2
@@ -205,6 +237,8 @@ effort_var="DELEGATE_EFFORT_${profile_upper}"
 agy_model_var="DELEGATE_AGY_MODEL_${profile_upper}"
 muse_model_var="DELEGATE_MUSE_MODEL_${profile_upper}"
 muse_effort_var="DELEGATE_MUSE_EFFORT_${profile_upper}"
+opencode_model_var="DELEGATE_OPENCODE_MODEL_${profile_upper}"
+opencode_variant_var="DELEGATE_OPENCODE_VARIANT_${profile_upper}"
 if [[ "$BACKEND" == "codex" || "$BACKEND" == "pi" ]]; then
   [[ -n "$MODEL" ]] || MODEL="${!model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No model configured for profile $PROFILE" >&2; exit 2; }
@@ -213,6 +247,47 @@ elif [[ "$BACKEND" == "muse" ]]; then
   [[ -n "$MODEL" ]] || MODEL="${!muse_model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No muse model configured for profile $PROFILE" >&2; exit 2; }
   [[ -n "$EFFORT" ]] || EFFORT="${!muse_effort_var:-high}"
+elif [[ "$BACKEND" == "opencode" ]]; then
+  if [[ -n "$PROFILE" ]]; then
+    [[ -n "$MODEL" ]] || MODEL="${!opencode_model_var:-}"
+    [[ -n "$EFFORT" ]] || EFFORT="${!opencode_variant_var:-}"
+  fi
+  if [[ -z "$MODEL" ]]; then
+    echo "No opencode model: pass --model, or set DELEGATE_OPENCODE_PROFILES and" >&2
+    echo "DELEGATE_OPENCODE_MODEL_* in config/models.env." >&2
+    exit 2
+  fi
+  # Honor DELEGATE_OPENCODE_MIN_VERSION here too: a knob only herd enforces does
+  # nothing for half the kit. Only run the check when a floor is actually
+  # configured -- it ships empty, and spawning a python preflight on every run
+  # would turn a missing python3 into a spurious version-floor failure.
+  if [[ "$DRY_RUN" -eq 0 && -n "${DELEGATE_OPENCODE_MIN_VERSION:-}" ]]; then
+    python3 - "$KIT_ROOT" <<'PYVER' || exit 7
+import sys
+sys.path.insert(0, sys.argv[1] + "/tools")
+import delegate_supervisor as ds
+try:
+    ds.require_opencode_version(ds.BACKENDS["opencode"].locate_bin())
+except ds.HerdError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(7)
+PYVER
+  fi
+  # Opencode ignores an unknown --variant in silence and there is no universal
+  # vocabulary, so an effort is checked against the model's declared variants.
+  # The shared supervisor helper does it, so both runners agree.
+  if [[ -n "$EFFORT" && "$DRY_RUN" -eq 0 ]]; then
+    python3 - "$KIT_ROOT" "$MODEL" "$EFFORT" <<'PYEFF' || exit 2
+import sys
+sys.path.insert(0, sys.argv[1] + "/tools")
+import delegate_supervisor as ds
+try:
+    ds.validate_opencode_effort(ds.BACKENDS["opencode"].locate_bin(), sys.argv[2], sys.argv[3])
+except ds.HerdError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(2)
+PYEFF
+  fi
 elif [[ "$BACKEND" == "agy" ]]; then
   # agy slugs bake the effort tier into the name, so a profile resolves to a full
   # agy slug (DELEGATE_AGY_MODEL_<PROFILE>) and no separate --effort is sent.
@@ -282,6 +357,9 @@ compose_prompt() {
       workspace-write) printf '%s\n\n' '**Access: workspace-write.** Work only inside the current project or worktree. Return outcome, changed files, validation, and blockers in the final message.' ;;
       danger-full-access) printf '%s\n\n' '**Access: unrestricted and explicitly authorized for this run.** Minimize changes outside the project and report every external effect.' ;;
     esac
+    if [[ "$BACKEND" == "opencode" && "$ACCESS" == "read-only" ]]; then
+      printf '%s\n\n' '**Opencode limitation:** Read-only opencode has file/search tools but no shell, so it cannot run git, ripgrep, or tests. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.'
+    fi
     if [[ "$BACKEND" == "pi" && "$ACCESS" == "read-only" ]]; then
       printf '%s\n\n' '**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.'
     fi
@@ -324,11 +402,29 @@ DRY
   exit 0
 fi
 
-command -v "$BACKEND" >/dev/null 2>&1 || { echo "$BACKEND CLI not found in PATH" >&2; exit 127; }
+# Honour the per-backend binary override before falling back to PATH. A valid
+# DELEGATE_<BACKEND>_BIN pointing at a build that is deliberately NOT on PATH was
+# rejected here with "CLI not found", even though the run would have used it.
+backend_upper="$(printf '%s' "$BACKEND" | tr '[:lower:]-' '[:upper:]_')"
+backend_bin_var="DELEGATE_${backend_upper}_BIN"
+BACKEND_BIN="${!backend_bin_var:-}"
+if [[ -n "$BACKEND_BIN" ]]; then
+  # -x alone accepts a directory; require a real executable file, matching what
+  # the supervisor's locate_bin() enforces.
+  [[ -f "$BACKEND_BIN" && -x "$BACKEND_BIN" ]] || \
+    { echo "$backend_bin_var=$BACKEND_BIN is not an executable file" >&2; exit 127; }
+else
+  BACKEND_BIN="$(command -v "$BACKEND" 2>/dev/null || true)"
+  [[ -n "$BACKEND_BIN" ]] || { echo "$BACKEND CLI not found in PATH (or set $backend_bin_var)" >&2; exit 127; }
+fi
 mkdir -p "$LOG_DIR"
 TTL_DAYS="${RUNNER_LOG_TTL_DAYS:-7}"
 [[ "$TTL_DAYS" =~ ^[0-9]+$ ]] || { echo "RUNNER_LOG_TTL_DAYS must be a nonnegative integer" >&2; exit 2; }
-find "$LOG_DIR" -type f \( -name '*.stdout.log' -o -name '*.stderr.log' \) -mtime "+$TTL_DAYS" -delete 2>/dev/null || true
+# The opencode session store is per run and transient, so it expires with the
+# stdout/stderr traces rather than accumulating in the shared log directory.
+find "$LOG_DIR" -type f \( -name '*.stdout.log' -o -name '*.stderr.log' \
+     -o -name '*.opencode.db' -o -name '*.opencode.db-wal' -o -name '*.opencode.db-shm' \) \
+     -mtime "+$TTL_DAYS" -delete 2>/dev/null || true
 
 if [[ "$WORKTREE" -eq 1 ]]; then
   created_worktree="$(python3 "$KIT_ROOT/tools/worktree_manager.py" create \
@@ -353,7 +449,7 @@ case "$BACKEND" in
     else
       args+=(--sandbox "$ACCESS" -c approval_policy=never)
     fi
-    codex "${args[@]}" - <<< "$COMPOSED_PROMPT" >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    "$BACKEND_BIN" "${args[@]}" - <<< "$COMPOSED_PROMPT" >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     ;;
   pi)
     # Pi has no filesystem sandbox. Read-only removes shell and write tools;
@@ -364,7 +460,7 @@ case "$BACKEND" in
           --no-approve --no-extensions --no-skills --no-prompt-templates --no-session)
     [[ "$ACCESS" == "read-only" ]] && args+=(--tools read,grep,find,ls)
     args+=(-p)
-    (cd "$EXEC_ROOT" && pi "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
   claude)
@@ -377,7 +473,7 @@ case "$BACKEND" in
     args=(-p - --output-format text --no-session-persistence --permission-mode "$permission_mode" --add-dir "$EXEC_ROOT")
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     [[ -n "$EFFORT" ]] && args+=(--effort "$EFFORT")
-    (cd "$EXEC_ROOT" && env -u CLAUDECODE claude "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    (cd "$EXEC_ROOT" && env -u CLAUDECODE "$BACKEND_BIN" "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
   muse)
@@ -399,7 +495,49 @@ case "$BACKEND" in
       danger-full-access) args+=(--yolo) ;;
     esac
     args+=(--prompt-file "$prompt_log")
-    (cd "$EXEC_ROOT" && muse "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
+    ;;
+  opencode)
+    # Opencode CLI, headless `run`: the final answer is plain text on stdout, so
+    # stdout is the report exactly as for pi/claude/muse/agy. herd uses
+    # --format json instead, because it needs the event stream.
+    #
+    # The prompt goes in on stdin via a heredoc, and the heredoc CLOSING it is
+    # load-bearing: `opencode run` reads stdin, so a stdin that never reaches EOF
+    # makes the run hang with no output and no timeout of its own.
+    #
+    # Access is enforced by environment. Read-only denies by default and allows
+    # back only the read surface -- enumerating write tools is not a boundary,
+    # because opencode leaves unlisted keys at allow. The rule-ARRAY form that
+    # `opencode debug agent` prints is silently ignored and fails OPEN, so the
+    # object form is used. workspace-write was refused earlier.
+    # A delekit-owned agent carries the policy and the run selects it by name.
+    # OPENCODE_PERMISSION alone is not enough: an agent's own permission block is
+    # merged AFTER the top-level one and the last matching rule wins, so an
+    # ordinary global `agent.build.permission` silently outranks it. Measured --
+    # with one present, a read-only run created the file it was denied.
+    if [[ "$ACCESS" == "read-only" ]]; then
+      oc_agent="delekit-readonly"
+      oc_cfg='{"agent": {"delekit-readonly": {"mode": "primary", "permission": {"*": "deny", "read": {"*": "allow", "mcp:*": "deny"}, "glob": "allow", "grep": "allow"}}}}'
+    else
+      oc_agent="delekit-full"
+      oc_cfg='{"agent": {"delekit-full": {"mode": "primary", "permission": {"*": "allow"}}}}'
+    fi
+    args=(--pure run --agent "$oc_agent" --dir "$EXEC_ROOT" --model "$MODEL")
+    [[ -n "$EFFORT" ]] && args+=(--variant "$EFFORT")
+    args+=(--auto)
+    oc_perm='{"*":"allow"}'
+    # The mcp:* deny must FOLLOW the read allow: last matching rule wins. `read`
+    # covers opencode's MCP resource operations, so a bare allow would let a
+    # delegate reading an untrusted repo pull data out of an operator-configured
+    # MCP server.
+    [[ "$ACCESS" == "read-only" ]] && oc_perm='{"*":"deny","read":{"*":"allow","mcp:*":"deny"},"glob":"allow","grep":"allow"}'
+    (cd "$EXEC_ROOT" && OPENCODE_PERMISSION="$oc_perm" \
+       OPENCODE_CONFIG_CONTENT="$oc_cfg" \
+       OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DB="${prefix}.opencode.db" \
+       env -u OPENCODE_CONFIG -u OPENCODE_AUTH_CONTENT \
+       "$BACKEND_BIN" "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
   agy)
@@ -417,7 +555,7 @@ case "$BACKEND" in
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
     [[ -n "$EFFORT" ]] && args+=(--effort "$EFFORT")
     args+=(-p "$COMPOSED_PROMPT")
-    (cd "$EXEC_ROOT" && agy "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
 esac
@@ -441,7 +579,10 @@ fi
 HEAD_SHA=""
 COMMITS=""
 if [[ "$WORKTREE" -eq 1 && -d "$WORKTREE_DIR" ]]; then
-  if [[ "$AUTO_COMMIT" -eq 1 ]]; then
+  # Commit only a turn that actually succeeded. This used to run unconditionally,
+  # so a backend that modified the worktree and then exited nonzero -- or produced
+  # no valid report -- still had its partial work committed under a failed status.
+  if [[ "$AUTO_COMMIT" -eq 1 && "$exit_code" -eq 0 ]]; then
     git -C "$WORKTREE_DIR" add -A >/dev/null 2>&1 || true
     if ! git -C "$WORKTREE_DIR" diff --cached --quiet 2>/dev/null; then
       git -C "$WORKTREE_DIR" commit -q -m "delegate(${MODE}): ${timestamp}" >/dev/null 2>&1 \

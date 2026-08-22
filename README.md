@@ -10,11 +10,18 @@ Delegate coding work from Claude Code or the terminal, on macOS and Windows:
   context window, through the same gateway. For work whose *input* exceeds a
   200k delegate.
 - **`dairy`** — a standalone CLI for one-shot, unattended, and CI jobs with
-  Codex, Pi, Claude, Muse, or Antigravity. No gateway required.
+  Codex, Pi, Claude, Muse, Antigravity, or Opencode. No gateway required.
 - **`herd`** — detached, resumable, steerable headless workers with Codex, Pi,
-  Claude, or Muse: spawn returns immediately, and you check on, steer, resume,
-  or kill the worker later. No gateway, no Claude session. State is
+  Claude, Muse, or Opencode: spawn returns immediately, and you check on, steer,
+  resume, or kill the worker later. No gateway, no Claude session. State is
   device-local and never synced.
+
+`opencode` is the reach backend: one already-authenticated CLI fronts model
+families nothing else here can get to, with default profiles on OpenCode Zen's
+**free tier**, so they cost nothing and run on an API key with no credits. Paid
+and OAuth models are reachable through an explicit `--model`. It cannot confine
+writes, so `workspace-write` is refused rather than mislabelled; read-only and
+full both work. See [docs/dairy-runner.md](docs/dairy-runner.md).
 
 Plus **`prune-worktrees`**, a safe cleaner for the isolated worktrees these
 paths create.

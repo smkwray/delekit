@@ -175,7 +175,7 @@ FAKE_AGY
 chmod +x "$TMP/fake-bin/agy"
 
 XDG_STATE_HOME="$TMP/agy-state" PATH="$TMP/fake-bin:/usr/bin:/bin" AGY_ARGS="$TMP/agy.args" \
-  "$ROOT/bin/dairy.sh" read --backend agy --model gemini-3.6-flash-high \
+  "$ROOT/bin/dairy.sh" read --backend agy --model gemini-3.7-flash-high \
   --project-root "$TMP/repo" --prompt 'agy smoke' --json > "$TMP/agy.json"
 
 python3 - "$TMP/agy.json" "$TMP/agy.args" <<'PY_AGY'
@@ -187,7 +187,7 @@ assert obj['access'] == 'read-only', obj
 assert 'fake agy completed' in open(obj['report'], encoding='utf-8').read(), obj
 args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]  # drop trailing empty
 i=args.index('--mode'); assert args[i+1] == 'plan', args      # read-only -> --mode plan
-assert 'gemini-3.6-flash-high' in args, args                  # explicit --model passed through
+assert 'gemini-3.7-flash-high' in args, args                  # explicit --model passed through
 assert args[-2] == '-p', args                                 # prompt is the single value of -p
 assert args[-1].endswith('agy smoke'), args                   # ...and carries the task text
 PY_AGY
@@ -210,9 +210,9 @@ import json, sys
 flash=json.load(open(sys.argv[1], encoding='utf-8'))
 pro=json.load(open(sys.argv[2], encoding='utf-8'))
 legacy=json.load(open(sys.argv[3], encoding='utf-8'))
-assert flash['profile'] == 'flash-high' and flash['model'] == 'gemini-3.6-flash-high', flash
+assert flash['profile'] == 'flash-high' and flash['model'] == 'gemini-3.7-flash-high', flash
 assert pro['profile'] == 'pro-high' and pro['model'] == 'gemini-3.1-pro-high', pro
-assert legacy['profile'] == 'flash-high' and legacy['model'] == 'gemini-3.6-flash-high', legacy
+assert legacy['profile'] == 'flash-high' and legacy['model'] == 'gemini-3.7-flash-high', legacy
 PY_AGY_PROF
 grep -q 'Deprecated agy profile terra; use flash-high' "$TMP/agy-legacy.err"
 
@@ -228,5 +228,139 @@ set -e
 grep -q 'no confined workspace-write' "$TMP/agy-ws.err"
 [[ ! -e "$TMP/agy-ws-state" ]]                                                    # failed before log dir
 [[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]  # no worktree
+
+# A failed run must NOT commit worktree changes. This used to run regardless of
+# exit code, so a backend that modified the worktree and then failed still had
+# its partial work committed under a failed status.
+cat > "$TMP/fake-bin/failwrite" <<'FAKE_FW'
+#!/usr/bin/env bash
+set -euo pipefail
+# Write into the execution root codex was pointed at, the way a real backend
+# would, so the partial work lands in the worktree under test.
+# No default: guessing the cwd is exactly how an earlier version of this fixture
+# wrote partial.txt into the repository root and got it committed.
+target=""
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "--cd" ]] && target="$a"
+  prev="$a"
+done
+[[ -n "$target" ]] || { echo "failwrite: no --cd given; refusing to guess a write target" >&2; exit 9; }
+printf 'partial\n' > "$target/partial.txt"
+printf 'Execution error\n'
+exit 3
+FAKE_FW
+chmod +x "$TMP/fake-bin/failwrite"
+cp "$TMP/fake-bin/failwrite" "$TMP/fake-bin/codex"
+set +e
+XDG_STATE_HOME="$TMP/fw-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" write --backend codex --model m --project-root "$TMP/repo" \
+  --prompt 'x' --worktree --dirty-policy ignore --json > "$TMP/fw.json" 2>"$TMP/fw.err"
+fw_rc=$?
+set -e
+[[ "$fw_rc" -ne 0 ]]
+python3 - "$TMP/fw.json" <<'PY_FW'
+import json, subprocess, sys
+obj = json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'failed', obj
+wt = obj['worktree']
+n = subprocess.run(['git', '-C', wt, 'rev-list', '--count', 'HEAD'],
+                   capture_output=True, text=True).stdout.strip()
+base = subprocess.run(['git', '-C', wt, 'status', '--porcelain'],
+                      capture_output=True, text=True).stdout
+assert 'partial.txt' in base, f"failed run must leave work UNCOMMITTED, got: {base!r}"
+PY_FW
+rm -f "$TMP/fake-bin/codex"
+
+# DELEGATE_<BACKEND>_BIN must be honoured, and must work when NO command of that
+# name is on PATH at all -- that is the whole point of an override. It also has
+# to be the binary actually executed, not merely validated.
+mkdir -p "$TMP/override"
+cat > "$TMP/override/not-on-path" <<'FAKE_OV'
+#!/usr/bin/env bash
+printf 'OVERRIDE-RAN\n'
+FAKE_OV
+chmod +x "$TMP/override/not-on-path"
+XDG_STATE_HOME="$TMP/ov-state" PATH="/usr/bin:/bin" \
+  DELEGATE_CODEX_BIN="$TMP/override/not-on-path" \
+  "$ROOT/bin/dairy.sh" read --backend codex --model m --project-root "$TMP/repo" \
+  --prompt 'x' --json > "$TMP/ov.json"
+python3 - "$TMP/ov.json" <<'PY_OV'
+import json, sys
+obj = json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'completed', obj
+assert 'OVERRIDE-RAN' in open(obj['report'], encoding='utf-8').read(), obj
+PY_OV
+
+# Opencode. Three properties, each a silent failure mode: the prompt must arrive
+# on STDIN (an stdin that never reaches EOF hangs `opencode run` forever),
+# read-only must export a DENY-BY-DEFAULT object policy (opencode leaves unlisted
+# keys at allow, and the rule-array form is ignored outright, so either mistake
+# grants writes to a run labelled read-only), and --auto plus --pure must be sent.
+cat > "$TMP/fake-bin/opencode" <<'FAKE_OC'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$OC_ARGS"
+printf '%s' "${OPENCODE_PERMISSION-<unset>}" > "$OC_PERM"
+printf '%s' "${OPENCODE_DISABLE_PROJECT_CONFIG-<unset>}" > "$OC_FLAGS"
+cat > "$OC_STDIN"
+printf 'fake opencode completed\n'
+FAKE_OC
+chmod +x "$TMP/fake-bin/opencode"
+
+XDG_STATE_HOME="$TMP/oc-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  OC_ARGS="$TMP/oc.args" OC_PERM="$TMP/oc.perm" OC_STDIN="$TMP/oc.stdin" OC_FLAGS="$TMP/oc.flags" \
+  "$ROOT/bin/dairy.sh" read --backend opencode --project-root "$TMP/repo" \
+  --prompt 'opencode smoke' --json > "$TMP/oc.json"
+
+python3 - "$TMP/oc.json" "$TMP/oc.args" "$TMP/oc.perm" "$TMP/oc.stdin" "$TMP/oc.flags" <<'PY_OC'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'completed', obj
+assert obj['backend'] == 'opencode' and obj['access'] == 'read-only', obj
+assert 'fake opencode completed' in open(obj['report'], encoding='utf-8').read(), obj
+args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]
+assert args[0] == '--pure' and args[1] == 'run', args      # --pure is a GLOBAL flag
+assert '--format' not in args, args                        # dairy takes plain text; herd takes json
+assert '--auto' in args, args                              # clears residual ask states
+i=args.index('--dir'); assert args[i+1] == obj['execution_root'], args
+perm=json.loads(open(sys.argv[3], encoding='utf-8').read())
+assert isinstance(perm, dict), perm                        # array form is ignored: fails OPEN
+assert perm.get('*') == 'deny', perm                       # unlisted tools must not default to allow
+assert list(perm)[0] == '*', perm                          # catch-all first; last match wins
+assert perm.get('glob') == 'allow' and perm.get('grep') == 'allow', perm
+read = perm.get('read') or {}
+assert read.get('*') == 'allow', perm                      # repo files stay readable
+assert read.get('mcp:*') == 'deny', perm                   # MCP resources do not
+keys = list(read)
+assert keys.index('mcp:*') > keys.index('*'), keys         # last match wins: deny must follow
+stdin=open(sys.argv[4], encoding='utf-8').read()
+assert 'opencode smoke' in stdin, stdin                    # prompt on stdin, not argv
+assert not any('opencode smoke' in a for a in args), args
+assert open(sys.argv[5], encoding='utf-8').read() == '1'   # project config disabled
+PY_OC
+
+# Full access is the only mode that opens the policy up.
+XDG_STATE_HOME="$TMP/oc-full" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  OC_ARGS="$TMP/ocf.args" OC_PERM="$TMP/ocf.perm" OC_STDIN="$TMP/ocf.stdin" OC_FLAGS="$TMP/ocf.flags" \
+  "$ROOT/bin/dairy.sh" full --backend opencode --model vendor/anything \
+  --project-root "$TMP/repo" --prompt 'x' --json > "$TMP/ocf.json"
+python3 - "$TMP/ocf.perm" <<'PY_OCF'
+import json, sys
+assert json.loads(open(sys.argv[1], encoding='utf-8').read()) == {'*': 'allow'}
+PY_OCF
+
+# Opencode's shell writes outside --dir, so workspace-write is refused up front,
+# before any log dir or worktree exists.
+set +e
+XDG_STATE_HOME="$TMP/oc-ws-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" workspace --backend opencode --project-root "$TMP/repo" \
+  --prompt 'nope' --worktree 2> "$TMP/oc-ws.err"
+oc_ws_rc=$?
+set -e
+[[ "$oc_ws_rc" -eq 2 ]]
+grep -q 'no confined workspace-write' "$TMP/oc-ws.err"
+[[ ! -e "$TMP/oc-ws-state" ]]
+[[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
 
 printf 'dairy runner smoke tests passed\n'
