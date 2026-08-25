@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy', 'opencode')]
+    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok')]
     [string]$Backend,
 
     [string]$Profile,
@@ -86,7 +86,7 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy', 'opencode')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
 $ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
@@ -148,8 +148,14 @@ if ($Backend -eq 'pi' -and $Fast) {
 if ($Backend -eq 'opencode' -and $Access -eq 'workspace-write') {
     throw 'opencode has no confined workspace-write mode: its shell writes outside --dir. Run opencode with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes.'
 }
-if ($Backend -eq 'opencode' -and $Fast) {
-    throw '-Fast is a Codex backend option and is not supported by opencode.'
+# Grok's built-in workspace profile has no Windows enforcement and built-in
+# profile application failures continue after a warning, so it cannot carry the
+# cross-platform confined-write label used by this runner.
+if ($Backend -eq 'grok' -and $Access -eq 'workspace-write') {
+    throw 'grok has no cross-platform fail-closed workspace-write mode. Run grok with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes.'
+}
+if ($Backend -in @('opencode', 'grok') -and $Fast) {
+    throw "-Fast is a Codex backend option and is not supported by $Backend."
 }
 
 # agy has no Codex-style filesystem sandbox: headless agy is either plan
@@ -328,6 +334,9 @@ if (-not $NoPreamble) {
     }
     if ($Backend -eq 'pi' -and $Access -eq 'read-only') {
         $parts.Add('**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.')
+    }
+    if ($Backend -eq 'grok' -and $Access -eq 'read-only') {
+        $parts.Add('**Grok limitation:** Read-only Grok has file/search tools but no shell, write tools, subagents, web search, or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.')
     }
     if ($Worktree) { $parts.Add('**Isolation: Git worktree.** Stay in the current worktree; do not switch branches, touch the main checkout, push, merge, or remove the worktree.') }
 }
@@ -533,6 +542,23 @@ try {
                     else { Set-Item "Env:\$n" $priorEnv[$n] }
                 }
             }
+            if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
+        }
+        'grok' {
+            # Grok Build headless mode: prompt-file avoids argv limits and plain
+            # stdout is the one-shot report. Herd uses the same prompt-file/cwd
+            # contract with native streaming-json for resumable turns.
+            $arguments = @('--no-auto-update', '--prompt-file', $PromptLog, '--cwd', $ExecutionRoot,
+                '--output-format', 'plain')
+            if ($Model) { $arguments += @('--model', $Model) }
+            if ($Effort) { $arguments += @('--reasoning-effort', $Effort) }
+            switch ($Access) {
+                'read-only' { $arguments += @('--permission-mode', 'dontAsk', '--sandbox', 'read-only', '--tools', 'read_file,grep,list_dir', '--deny', 'MCPTool(*)', '--no-subagents', '--disable-web-search') }
+                'danger-full-access' { $arguments += @('--permission-mode', 'bypassPermissions', '--sandbox', 'off') }
+            }
+            Push-Location $ExecutionRoot
+            try { & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
         'agy' {

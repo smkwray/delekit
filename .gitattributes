@@ -1,10 +1,8 @@
-# This working tree is shared between macOS and Windows checkouts over OneDrive,
-# so line endings must not depend on whichever device last wrote a file.
+# This working tree is shared between macOS and Windows checkouts, so line
+# endings must not depend on whichever device last wrote a file.
 #
 # Without this, Git for Windows' default core.autocrlf=true rewrites checked-out
-# files to CRLF, the sync layer carries them to the Mac, and every tracked file
-# then reads as locally modified. Observed 2026-07-24: a fresh Windows clone
-# showed all 68 tracked files changed, none of them actually edited.
+# files to CRLF, and every tracked file can then read as locally modified.
 #
 # LF everywhere also keeps bin/*.sh and the doctor scripts runnable, and lets
 # patches/*.patch apply cleanly with `git apply` (which is whitespace-sensitive).

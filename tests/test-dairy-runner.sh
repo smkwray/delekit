@@ -363,4 +363,62 @@ grep -q 'no confined workspace-write' "$TMP/oc-ws.err"
 [[ ! -e "$TMP/oc-ws-state" ]]
 [[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
 
+# Grok Build: dairy uses the prompt file and plain output, and maps read-only
+# to Grok's native sandbox plus a read-only built-in tool allowlist.
+cat > "$TMP/fake-bin/grok" <<'FAKE_GROK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$GROK_ARGS"
+prompt_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prompt-file) prompt_file="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$prompt_file" && -f "$prompt_file" ]]
+cp "$prompt_file" "$GROK_PROMPT"
+printf 'fake grok completed\n'
+FAKE_GROK
+chmod +x "$TMP/fake-bin/grok"
+
+XDG_STATE_HOME="$TMP/grok-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  GROK_ARGS="$TMP/grok.args" GROK_PROMPT="$TMP/grok.prompt" \
+  "$ROOT/bin/dairy.sh" read --backend grok --model grok-4.6 --project-root "$TMP/repo" \
+  --prompt 'grok smoke' --json > "$TMP/grok.json"
+
+python3 - "$TMP/grok.json" "$TMP/grok.args" "$TMP/grok.prompt" <<'PY_GROK'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['status'] == 'completed' and obj['backend'] == 'grok', obj
+assert obj['model'] == 'grok-4.6' and obj['access'] == 'read-only', obj
+assert 'fake grok completed' in open(obj['report'], encoding='utf-8').read(), obj
+args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]
+for expected in ('--no-auto-update', '--prompt-file', '--cwd', '--output-format', 'plain',
+                 '--permission-mode', 'dontAsk', '--sandbox', 'read-only',
+                 '--tools', 'read_file,grep,list_dir', '--deny', 'MCPTool(*)',
+                 '--no-subagents', '--disable-web-search'):
+    assert expected in args, (expected, args)
+prompt=open(sys.argv[3], encoding='utf-8').read()
+assert 'no shell, write tools, subagents, web search, or test execution' in prompt
+assert prompt.rstrip().endswith('grok smoke')
+assert not any('grok smoke' in a for a in args), args
+PY_GROK
+
+# Grok workspace-write is refused before state or worktree creation because
+# the native workspace sandbox has no Windows enforcement and fails open when
+# application fails. The PowerShell runner must carry the same refusal.
+set +e
+XDG_STATE_HOME="$TMP/grok-ws-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" workspace --backend grok --project-root "$TMP/repo" \
+  --prompt 'nope' --worktree 2> "$TMP/grok-ws.err"
+grok_ws_rc=$?
+set -e
+[[ "$grok_ws_rc" -eq 2 ]]
+grep -q 'no cross-platform fail-closed workspace-write' "$TMP/grok-ws.err"
+[[ ! -e "$TMP/grok-ws-state" ]]
+[[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
+grep -Fq "if (\$Backend -eq 'grok' -and \$Access -eq 'workspace-write')" "$ROOT/bin/dairy.ps1"
+! grep -Fq "'workspace-write' { \$arguments += @('--permission-mode', 'bypassPermissions', '--sandbox', 'workspace') }" "$ROOT/bin/dairy.ps1"
+
 printf 'dairy runner smoke tests passed\n'

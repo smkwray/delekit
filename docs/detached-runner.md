@@ -1,7 +1,7 @@
 # herd — detached delegate workers
 
 **`herd`** spawns and herds detached headless workers: fire-and-forget agents on
-Codex, Pi, Claude, Muse, or Opencode that keep running after the command returns, and that you can
+Codex, Pi, Claude, Muse, Opencode, or Grok Build that keep running after the command returns, and that you can
 check on, steer, and resume later — with no gateway and no Claude session.
 
 ## What it is
@@ -18,12 +18,22 @@ Pi, Claude, Muse, or Opencode, with **no gateway** and **no Claude session** —
 bare terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
 sibling of `tandy`, and the steerable sibling of `dairy`.
 
-Backends: **codex, pi, claude, muse, and opencode.** (No grok, no gemini, no Antigravity
-(`agy`) for the detached path — their headless CLIs emit no streaming JSON or
-session id we can scrape to observe activity and resume. `agy` print mode (`-p`)
-returns only the final plain-text answer, with no event stream and no resume
-handle on stdout, so it fits `dairy` but not this supervisor. It is the same
-reason gemini was excluded.)
+Backends: **codex, pi, claude, muse, opencode, and grok.** Gemini and Antigravity
+(`agy`) remain excluded from the detached path because their headless CLIs do
+not provide the session/event contract this supervisor needs.
+
+Grok uses native `--output-format streaming-json`: text arrives in chunks,
+`usage` marks response boundaries, and the terminal `end` carries the session
+id but no answer text. Herd preallocates a UUID for the initial
+`--session-id`, resumes with `--resume <session_id>`, and publishes only the
+last complete response segment. The adapter uses `--prompt-file` to avoid argv
+limits and maps read-only/full to Grok's native controls. `workspace-write`
+is refused: Grok documents OS sandbox enforcement for Linux and macOS, not
+Windows, and a built-in profile that cannot be applied warns and continues
+unenforced. Grok's read-only mode independently exposes only
+`read_file,grep,list_dir`, denies MCP tools, disables subagents and web search,
+and therefore cannot run tests or shell commands; its OS sandbox is defense in
+depth rather than the sole boundary.
 
 `muse exec --json` qualifies on both counts: every record carries
 `stream.id` (the session id) and the turn's answer arrives as one
@@ -103,10 +113,9 @@ generous `stall-after` is safe.
   bound**. Reclamation happens when `prune` removes the terminal task directory.
   The kit itself never grows; local disk is bounded in the ordinary case, not
   guaranteed.
-- **State never syncs across devices.** A pid or resume-id from the Mac is
-  meaningless on Windows, and a live pidfile through OneDrive would conflict-copy.
-  State is device-scoped (see below); control never crosses machines. The *kit*
-  syncs via git; that is the only thing that crosses devices.
+- **State never syncs across devices.** A pid or resume-id from one machine is
+  meaningless on another. State is device-scoped (see below); control never
+  crosses machines. The *kit* is the portable surface; runtime state stays local.
 
 ## Non-negotiable: no venv, mac + windows
 
@@ -226,10 +235,10 @@ herd prune  [--apply] [--idle-min N] [--any-owner]   GC terminal+idle dirs (dry-
 herd doctor                                   env / dirs / backend checks
 ```
 
-Core opts mirror `dairy`: `--backend codex|pi|claude|muse|opencode`, `--profile`
+Core opts mirror `dairy`: `--backend codex|pi|claude|muse|opencode|grok`, `--profile`
 (backend-specific, resolved from `config/models.env`: codex and pi take
 `terra|luna|sol` with `terra` default, muse takes `spark`, opencode takes
-`ox|nemotron|hy3` with `ox` default, all free-tier), `--model`,
+`ox|nemotron|hy3` with `ox` default, and grok uses the CLI model default), `--model`,
 `--effort`, `--access`/`--sandbox`, `--worktree` + `--dirty-policy` +
 `--no-auto-commit`, `--no-preamble`, `--json`. Access→sandbox/permission mapping
 and the access preamble are lifted verbatim from `dairy` so the two runners stay
@@ -249,7 +258,7 @@ so it keeps driving the window it opened instead of starting blind.
 
 ## Backend adapters
 
-All five stream JSON so we can capture the session id and observe activity live.
+All six stream JSON so we can capture the session id and observe activity live.
 Unlike `dairy`'s backend-specific one-shot paths, every `herd` adapter must
 persist and recover a resumable session handle.
 
@@ -337,6 +346,19 @@ persist and recover a resumable session handle.
     exactly the required shape. Opencode exposes no separate reasoning stream on
     the models measured, so `peek --thinking` stays empty, as it does for muse.
 
+- **grok**
+  - spawn: `grok --no-auto-update --prompt-file <task>/prompt.md --cwd <root> --output-format streaming-json --session-id <uuid> --model <m> --reasoning-effort <e> [sandbox flags]`
+  - resume: the same command plus `--resume <session_id>`.
+  - parse: accumulate `text.data` until each `usage` response boundary and keep
+    only the latest complete segment, including a contentless segment. Require
+    terminal `end.sessionId` to equal the preallocated UUID, require
+    `end.stopReason=end_turn`, and reject residual text with no final `usage`
+    boundary. Grok 0.2.116 is the herd minimum because that release added usage
+    records to native `streaming-json`. The read-only tool allowlist is
+    `read_file,grep,list_dir`, plus `--permission-mode dontAsk`, `--deny
+    MCPTool(*)`, `--sandbox read-only`, `--no-subagents`, and
+    `--disable-web-search`.
+
 ## How detach works
 
 `spawn` writes `prompt.md` + `meta.json`, then launches a `__run_turn` helper
@@ -360,7 +382,7 @@ tools/worktree_manager.py             the single creator of project-local worktr
 bin/herd.sh  bin/herd.ps1             thin shims on PATH (wired by the installers)
 tests/test_delegate_supervisor.py     reaper / prune / list / kill against fixtures
 tests/test_delegate_backends.py       spawn/result/send/stall via a fake backend
-tests/fake_backend.py                 a controllable codex/pi/claude/muse stand-in, no network
+tests/fake_backend.py                 a controllable codex/pi/claude/muse/opencode/grok stand-in, no network
 docs/detached-runner.md               this doc
 ```
 

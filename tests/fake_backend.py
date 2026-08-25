@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""A fake codex/pi/claude/muse/opencode CLI for herd tests. No network.
+"""A fake codex/pi/claude/muse/opencode/grok CLI for herd tests. No network.
 
 Detects which backend it is impersonating from argv (codex uses `exec` with a
 `-` stdin prompt, pi uses `--mode json`, claude uses `-p`, muse uses
-`--prompt-file`, opencode uses `run --format json`) and emits that
-backend's streaming-JSON event schema, then exits.
+`--prompt-file`, grok uses `--output-format streaming-json`, opencode
+uses `run --format json`) and emits that backend's streaming-JSON event schema,
+then exits.
 
 Env knobs:
   FAKE_HANG=1   emit the session id, then sleep without further output
@@ -20,6 +21,11 @@ Env knobs:
                 detached-child handoff.
   FAKE_WRITE_FILE  create this file in the cwd (the execution root) before
                 finishing, so worktree auto-commit behaviour is observable.
+  FAKE_GROK_VERSION  version reported to Grok's compatibility probe.
+  FAKE_GROK_MISSING_SESSION=1  omit sessionId from Grok's terminal end event.
+  FAKE_GROK_EMPTY_FINAL=1  finish Grok with a contentless final response.
+  FAKE_GROK_STOP_REASON  override Grok's terminal stop reason.
+  FAKE_GROK_OMIT_FINAL_USAGE=1  omit Grok's final usage response boundary.
   FAKE_ORPHAN_HOLDS_PIPE=1  answer normally, detach a setsid grandchild that
                 INHERITS stdout, then exit 0 -- the shape opencode's shell tool
                 produces, which leaves the reader blocked on a pipe nobody will
@@ -60,7 +66,10 @@ def main():
     # model's declared variants. The stand-in has to answer both or every
     # opencode test fails on the probe rather than on the behaviour under test.
     if "--version" in argv:
-        print(os.environ.get("FAKE_OPENCODE_VERSION", "1.18.20"))
+        # One stand-in serves both version probes. Grok-specific tests override
+        # FAKE_GROK_VERSION; opencode keeps its existing knob.
+        print(os.environ.get("FAKE_GROK_VERSION",
+                             os.environ.get("FAKE_OPENCODE_VERSION", "1.18.20")))
         return 0
     if "models" in argv:
         variants = [v for v in os.environ.get("FAKE_VARIANTS", "low,high").split(",") if v]
@@ -70,13 +79,24 @@ def main():
         return 0
     is_pi = "--mode" in argv and argv[argv.index("--mode") + 1] == "json"
     is_claude = "-p" in argv
-    is_muse = "--prompt-file" in argv
+    is_grok = ("--output-format" in argv and
+               argv[argv.index("--output-format") + 1] == "streaming-json")
+    is_muse = "--prompt-file" in argv and not is_grok
     is_opencode = "run" in argv and "--format" in argv
-    is_resume = ("resume" in argv) or ("--resume" in argv) or ("--session-id" in argv) or ("--session" in argv)
-    sid = "sess-fake-0001"
+    is_resume = (("resume" in argv) or ("--resume" in argv) or ("--session" in argv) or
+                 ("--session-id" in argv and not is_grok))
+    if is_grok and "--session-id" in argv and "--resume" in argv:
+        print("fake grok: --session-id and --resume are mutually exclusive", file=sys.stderr)
+        return 2
+    if is_grok and "--session-id" in argv:
+        sid = argv[argv.index("--session-id") + 1]
+    elif is_grok and "--resume" in argv:
+        sid = argv[argv.index("--resume") + 1]
+    else:
+        sid = "sess-fake-0001"
 
-    if is_muse:
-        # Muse reads the prompt from a file and never from stdin.
+    if is_muse or is_grok:
+        # Muse and Grok read the prompt from a file and never from stdin.
         with open(argv[argv.index("--prompt-file") + 1], encoding="utf-8") as fh:
             prompt = fh.read()
     else:
@@ -89,6 +109,10 @@ def main():
         emit({"type": "system", "subtype": "init", "session_id": sid})
     elif is_muse:
         emit(muse_envelope("run.lifecycle.started", {"kind": "run_started"}, sid))
+    elif is_grok:
+        # Native streaming-json does not require an init event; the session id
+        # is returned on the terminal end event.
+        pass
     elif is_opencode:
         # Opencode stamps sessionID on every event, so the resume handle is
         # available from the first line rather than a dedicated init event.
@@ -163,6 +187,23 @@ def main():
         emit(muse_envelope("run.output.delta", {"kind": "run_output_delta", "text": body[:4]}, sid))
         emit(muse_envelope("run.terminal.completed",
                            {"kind": "run_terminal", "terminal": "completed", "text": body}, sid))
+    elif is_grok:
+        # Two model responses separated by usage: only the post-tool/final
+        # response may become herd's report. Native streaming-json emits one
+        # usage record per response and then a terminal end event.
+        emit({"type": "text", "data": "pre-tool response"})
+        emit({"type": "usage", "messageId": "resp-1", "stopReason": "tool_use"})
+        stop_reason = os.environ.get("FAKE_GROK_STOP_REASON", "end_turn")
+        if os.environ.get("FAKE_GROK_EMPTY_FINAL") != "1":
+            emit({"type": "text", "data": body})
+        if os.environ.get("FAKE_GROK_OMIT_FINAL_USAGE") != "1":
+            emit({"type": "usage", "messageId": "resp-2", "stopReason": stop_reason})
+        end_sid = ("00000000-0000-4000-8000-000000000000"
+                   if os.environ.get("FAKE_GROK_SESSION_MISMATCH") == "1" else sid)
+        end = {"type": "end", "stopReason": stop_reason, "requestId": "req-fake-1"}
+        if os.environ.get("FAKE_GROK_MISSING_SESSION") != "1":
+            end["sessionId"] = end_sid
+        emit(end)
     else:
         emit({"msg": {"type": "agent_reasoning", "text": "thinking about it"}})
         emit({"type": "agent_message", "message": body})

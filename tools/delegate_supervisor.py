@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """herd: detached, resumable, steerable headless delegate workers.
 
-Backends: codex, pi, claude, muse, opencode.
+Backends: codex, pi, claude, muse, opencode, grok.
 
 Stdlib only. See docs/detached-runner.md for the design. This is the shared
 cross-platform core; bin/herd.sh and bin/herd.ps1 are thin shims onto it.
@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
@@ -722,9 +723,80 @@ class OpencodeBackend(Backend):
         return out
 
 
+class GrokBackend(Backend):
+    """Grok Build CLI in native headless streaming-JSON mode.
+
+    Native `streaming-json` emits response text in chunks, a `usage` boundary
+    after each model response, and a terminal `end` event carrying the session
+    id but no answer text. The turn reducer therefore keeps only the last
+    complete response segment. The prompt is a file so long tasks never depend
+    on shell argv limits.
+    """
+
+    name = "grok"
+    bin_env = "DELEGATE_GROK_BIN"
+
+    def sandbox_args(self, access: str) -> list[str]:
+        if access == "read-only":
+            # `dontAsk` makes an unexpected permission request fail closed;
+            # always-approve is deliberately not used for read-only. MCP is
+            # denied explicitly because --tools controls built-ins only.
+            return ["--permission-mode", "dontAsk", "--sandbox", "read-only",
+                    "--tools", "read_file,grep,list_dir", "--deny", "MCPTool(*)",
+                    "--no-subagents", "--disable-web-search"]
+        if access == "workspace-write":
+            raise HerdError(2, "grok has no cross-platform fail-closed workspace-write mode: "
+                               "its built-in workspace sandbox is unavailable on Windows and "
+                               "built-in profiles continue unenforced when application fails. "
+                               "Use readonly, or full for explicit unrestricted writes; "
+                               "use codex/claude for confined writes")
+        if access == "danger-full-access":
+            return ["--permission-mode", "bypassPermissions", "--sandbox", "off"]
+        raise HerdError(2, f"unsupported grok access mode: {access}")
+
+    def _base(self, meta: dict[str, Any]) -> list[str]:
+        argv = [self.resolved_bin(meta), "--no-auto-update", "--prompt-file",
+                str(task_dir(meta["task"]) / "prompt.md"), "--cwd", meta["exec_root"],
+                "--output-format", "streaming-json"]
+        if meta.get("model"):
+            argv += ["--model", meta["model"]]
+        if meta.get("effort"):
+            argv += ["--reasoning-effort", meta["effort"]]
+        argv += self.sandbox_args(meta["access"])
+        return argv
+
+    def spawn_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta) + ["--session-id", meta["session_id"]], "", meta["exec_root"]
+
+    def resume_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta) + ["--resume", meta["session_id"]], "", meta["exec_root"]
+
+    def parse(self, obj: dict[str, Any]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for key in ("session_id", "sessionId"):
+            if isinstance(obj.get(key), str):
+                out["session_id"] = obj[key]
+                break
+        if obj.get("type") == "text" and isinstance(obj.get("data"), str):
+            out["message_delta"] = obj["data"]
+        elif obj.get("type") == "usage":
+            out["response_boundary"] = "1"
+        elif obj.get("type") == "end":
+            out["terminal"] = "1"
+            if isinstance(obj.get("sessionId"), str):
+                out["terminal_session_id"] = obj["sessionId"]
+            if isinstance(obj.get("stopReason"), str):
+                out["terminal_stop_reason"] = obj["stopReason"]
+        elif obj.get("type") == "thought" and isinstance(obj.get("data"), str):
+            out["thinking"] = obj["data"]
+        elif obj.get("type") == "error":
+            out["error"] = str(obj.get("message") or "Grok emitted an error event")
+        return out
+
+
 BACKENDS: dict[str, Backend] = {
     "codex": CodexBackend(), "pi": PiBackend(), "claude": ClaudeBackend(), "muse": MuseBackend(),
-    "opencode": OpencodeBackend(),
+    "opencode": OpencodeBackend(), "grok": GrokBackend(),
 }
 
 
@@ -1216,6 +1288,10 @@ def run_turn(task: str, mode: str) -> int:
         Thread(target=pump, daemon=True).start()
 
         last_message: str | None = None
+        grok_response_chunks: list[str] = []
+        grok_last_complete: str | None = None
+        grok_terminal = False
+        protocol_error: list[str | None] = [None]
         saw_eof = False
         with open(tdir / "events.jsonl", "a", encoding="utf-8") as events:
             while True:
@@ -1245,11 +1321,50 @@ def run_turn(task: str, mode: str) -> int:
                 except json.JSONDecodeError:
                     continue
                 parsed = backend.parse(obj)
-                if parsed.get("session_id") and not meta.get("session_id"):
-                    meta["session_id"] = parsed["session_id"]
-                    atomic_write_json(tdir / "meta.json", meta)
-                if parsed.get("message"):
+                emitted_session = parsed.get("session_id")
+                if emitted_session:
+                    if backend.name == "grok" and meta.get("session_id"):
+                        if emitted_session != meta["session_id"]:
+                            protocol_error[0] = (
+                                f"Grok emitted session {emitted_session}, expected {meta['session_id']}.")
+                    elif not meta.get("session_id"):
+                        meta["session_id"] = emitted_session
+                        atomic_write_json(tdir / "meta.json", meta)
+                if backend.name == "grok":
+                    if "message_delta" in parsed:
+                        grok_response_chunks.append(parsed["message_delta"])
+                    if parsed.get("response_boundary"):
+                        # Every usage event is a response boundary, including a
+                        # completed response with no text. Recording the empty
+                        # segment is load-bearing: otherwise a contentless final
+                        # response re-publishes the preceding pre-tool text.
+                        grok_last_complete = "".join(grok_response_chunks)
+                        grok_response_chunks.clear()
+                    if parsed.get("terminal"):
+                        grok_terminal = True
+                        terminal_session = parsed.get("terminal_session_id")
+                        if not terminal_session:
+                            protocol_error[0] = protocol_error[0] or (
+                                "Grok terminal end event omitted sessionId.")
+                        elif meta.get("session_id") and terminal_session != meta["session_id"]:
+                            protocol_error[0] = protocol_error[0] or (
+                                f"Grok terminal session {terminal_session}, expected {meta['session_id']}.")
+                        terminal_reason = parsed.get("terminal_stop_reason")
+                        if not terminal_reason:
+                            protocol_error[0] = protocol_error[0] or (
+                                "Grok terminal end event omitted stopReason.")
+                        elif terminal_reason != "end_turn":
+                            protocol_error[0] = protocol_error[0] or (
+                                f"Grok ended with non-success stopReason={terminal_reason}.")
+                        if grok_response_chunks:
+                            protocol_error[0] = protocol_error[0] or (
+                                "Grok emitted terminal end before the final usage response boundary.")
+                    if parsed.get("error"):
+                        protocol_error[0] = protocol_error[0] or parsed["error"]
+                elif parsed.get("message"):
                     last_message = parsed["message"]
+                elif parsed.get("message_delta"):
+                    last_message = (last_message or "") + parsed["message_delta"]
 
         # Keep the watchdog armed across the wait. The stream can end before the
         # process does -- a backend that closes stdout and lingers -- and an
@@ -1282,6 +1397,16 @@ def run_turn(task: str, mode: str) -> int:
                 pass
         stderr_f.close()
         watcher.join(timeout=PS_SCAN_TIMEOUT_S + 5)
+        if backend.name == "grok":
+            if grok_response_chunks and protocol_error[0] is None:
+                protocol_error[0] = (
+                    "Grok stream ended with text that had no usage response boundary.")
+            # Empty final responses are valid protocol events but not successful
+            # delegate reports. Preserve no earlier segment: classification below
+            # must produce empty-report rather than a stale pre-tool answer.
+            last_message = grok_last_complete if (grok_last_complete or "").strip() else None
+            if not grok_terminal and protocol_error[0] is None:
+                protocol_error[0] = "Grok stream ended without its terminal end event."
         if last_message is not None:
             (tdir / "report.md").write_text(last_message, encoding="utf-8")
         cap_events(tdir)
@@ -1293,6 +1418,8 @@ def run_turn(task: str, mode: str) -> int:
             # defect this repair introduced, so it is not pre-existing.
             fail("failed", "stream-error",
                  "The delegate's output stream failed mid-turn; the answer is incomplete.")
+        elif protocol_error[0] is not None:
+            fail("failed", "grok-protocol", f"Grok protocol error: {protocol_error[0]}")
         elif kill_reason[0] == "no-exit":
             fail("failed", "no-exit",
                  "Delegate closed its output but did not exit; it was stopped.")
@@ -1398,6 +1525,7 @@ PI_READONLY_LINE = "**Pi limitation:** Read-only Pi has file/search tools but no
 # ripgrep, and test execution, and must say so instead of quietly shrinking the
 # task to what it can still check.
 OPENCODE_READONLY_LINE = "**Opencode limitation:** Read-only opencode has file/search tools but no shell, so it cannot run git, ripgrep, or tests. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive."
+GROK_READONLY_LINE = "**Grok limitation:** Read-only Grok has file/search tools but no shell, write tools, subagents, web search, or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive."
 
 
 def find_project_root(start: str) -> str:
@@ -1526,6 +1654,54 @@ def _opencode_doctor_fields() -> dict[str, Any]:
         "opencode_min_version": ".".join(str(n) for n in (opencode_min_version() or ())) or None,
         "opencode_version_ok": bool(resolved) and (
             opencode_min_version() is None or (opencode_version(resolved) or ()) >= opencode_min_version()),
+    }
+
+
+# Grok 0.2.116 is the first release whose native streaming-json includes
+# per-response usage boundaries. Herd relies on those boundaries to discard
+# pre-tool assistant text and retain only the final model response.
+GROK_MIN_VERSION = (0, 2, 116)
+
+
+def grok_version(bin_path: str) -> tuple[int, ...] | None:
+    """The Grok binary's reported semantic version, or None on a failed probe."""
+    try:
+        out = subprocess.run([bin_path, "--no-auto-update", "--version"],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    match = re.search(r"(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)", out.stdout or "")
+    return tuple(int(group) for group in match.groups()) if match else None
+
+
+def require_grok_version(bin_path: str) -> None:
+    want = ".".join(str(n) for n in GROK_MIN_VERSION)
+    got = grok_version(bin_path)
+    if got is None:
+        raise HerdError(7, f"could not determine the Grok version; herd requires {want} or later "
+                           "for native streaming-json response boundaries")
+    if got < GROK_MIN_VERSION:
+        have = ".".join(str(n) for n in got)
+        raise HerdError(7, f"Grok {have} is older than the herd minimum {want}: "
+                           "earlier streaming-json did not include the usage boundaries "
+                           "needed to select the final response. Upgrade Grok or point "
+                           "DELEGATE_GROK_BIN at a newer binary")
+
+
+def _grok_doctor_fields() -> dict[str, Any]:
+    """Version facts for the Grok binary a spawn would really launch."""
+    try:
+        resolved = BACKENDS["grok"].locate_bin()
+    except HerdError:
+        resolved = None
+    parsed = grok_version(resolved) if resolved else None
+    return {
+        "grok_bin": resolved,
+        "grok_version": ".".join(str(n) for n in parsed) if parsed else None,
+        "grok_min_version": ".".join(str(n) for n in GROK_MIN_VERSION),
+        "grok_version_ok": bool(parsed) and parsed >= GROK_MIN_VERSION,
     }
 
 
@@ -1699,8 +1875,13 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     if args.backend == "opencode" and access == "workspace-write":
         raise HerdError(2, "opencode has no confined workspace-write mode: its shell writes outside --dir. "
                            "Use readonly, or full for explicit unrestricted writes; use codex/claude for confined writes")
-    if args.backend == "opencode" and args.fast:
-        raise HerdError(2, "--fast is a Codex backend option and is not supported by opencode")
+    if args.backend == "grok" and access == "workspace-write":
+        raise HerdError(2, "grok has no cross-platform fail-closed workspace-write mode: its built-in "
+                           "sandbox is unsupported on Windows and built-in profiles continue unenforced "
+                           "when application fails. Use readonly, or full for explicit unrestricted writes; "
+                           "use codex/claude for confined writes")
+    if args.backend in ("opencode", "grok") and args.fast:
+        raise HerdError(2, f"--fast is a Codex backend option and is not supported by {args.backend}")
     prompt = resolve_prompt(args)
     if not prompt.strip():
         raise HerdError(2, "task prompt is empty")
@@ -1710,12 +1891,15 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     # backends that have no `terra`.
     model, effort = resolve_model_effort(args.backend, args.profile or DEFAULT_PROFILE,
                                          args.profile is not None, args.model, args.effort)
-    opencode_bin = None
+    admitted_bin = None
+    if args.backend in ("opencode", "grok"):
+        admitted_bin = BACKENDS[args.backend].locate_bin()
     if args.backend == "opencode":
-        opencode_bin = BACKENDS["opencode"].locate_bin()
-        require_opencode_version(opencode_bin)
+        require_opencode_version(admitted_bin)
         if effort:
-            validate_opencode_effort(opencode_bin, model, effort)
+            validate_opencode_effort(admitted_bin, model, effort)
+    if args.backend == "grok":
+        require_grok_version(admitted_bin)
     project_root = args.project_root or find_project_root(os.getcwd())
     project_root = os.path.realpath(project_root)
     if not os.path.isdir(project_root):
@@ -1734,6 +1918,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     if worktree:
         exec_root, branch = create_worktree(project_root, task, args.dirty_policy)
 
+    grok_session_id = str(uuid.uuid4()) if args.backend == "grok" else None
     composed = prompt
     if not args.no_preamble:
         head = PREAMBLE[access]
@@ -1741,6 +1926,8 @@ def cmd_spawn(args: argparse.Namespace) -> int:
             head += "\n\n" + PI_READONLY_LINE
         if args.backend == "opencode" and access == "read-only":
             head += "\n\n" + OPENCODE_READONLY_LINE
+        if args.backend == "grok" and access == "read-only":
+            head += "\n\n" + GROK_READONLY_LINE
         if worktree:
             head += "\n\n" + WORKTREE_LINE
         composed = head + "\n\n" + prompt
@@ -1751,11 +1938,11 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         "task": task, "state": "working", "backend": args.backend, "model": model, "effort": effort,
         # The exact binary this task was admitted with; the helper and every
         # resume use it rather than resolving again.
-        "backend_bin": opencode_bin,
+        "backend_bin": admitted_bin,
         "access": access, "repo": project_root, "exec_root": exec_root, "worktree": worktree,
         "branch": branch, "auto_commit": not args.no_auto_commit, "prompt": composed,
         "fast": bool(getattr(args, "fast", False)),
-        "pid": None, "session_id": None, "owner": owner_id(), "created_utc": now(),
+        "pid": None, "session_id": grok_session_id, "owner": owner_id(), "created_utc": now(),
         "stall_after_s": int(args.stall_after), "deadline_utc": now() + int(args.deadline),
     }
     atomic_write_json(tdir / "meta.json", meta)
@@ -1804,6 +1991,8 @@ def cmd_send(args: argparse.Namespace) -> int:
     # catalogue could all change between turns and the next turn ran unchecked.
     if meta.get("backend") == "opencode":
         require_opencode_version(BACKENDS["opencode"].resolved_bin(meta))
+    if meta.get("backend") == "grok":
+        require_grok_version(BACKENDS["grok"].resolved_bin(meta))
 
     # Rotate the previous answer HERE, before any state change or helper launch.
     # run_turn also rotates, but that happens inside the child: if the helper
@@ -1999,6 +2188,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "claude_on_path": shutil.which("claude") is not None,
         "muse_on_path": shutil.which("muse") is not None,
         "opencode_on_path": shutil.which("opencode") is not None,
+        "grok_on_path": shutil.which("grok") is not None,
         # Report the binary a spawn would ACTUALLY use, which is the
         # DELEGATE_OPENCODE_BIN override when one is set -- doctor reporting the
         # PATH copy while spawn used another is exactly the kind of mismatch that
@@ -2006,6 +2196,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # is a hard refusal when set: below 1.18.20 a `task` subagent's permission
         # request is dropped rather than answered, and the tool runs anyway.
         **_opencode_doctor_fields(),
+        **_grok_doctor_fields(),
         "models_env": str(KIT_ROOT / "config" / "models.env"),
         "default_stall_after_s": DEFAULT_STALL_AFTER_S, "default_deadline_s": DEFAULT_DEADLINE_S,
     }
@@ -2025,7 +2216,7 @@ def cmd_run_turn(args: argparse.Namespace) -> int:
 # CLI
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/pi/claude/muse/opencode).")
+    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/pi/claude/muse/opencode/grok).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_json(sp: argparse.ArgumentParser) -> None:

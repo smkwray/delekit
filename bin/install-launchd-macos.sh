@@ -34,14 +34,6 @@ BIN="$PROXY_DIR/cli-proxy-api"
 CONFIG="$PROXY_DIR/config.yaml"
 [[ -x "$BIN" ]] || { echo "Not executable: $BIN" >&2; exit 1; }
 [[ -f "$CONFIG" ]] || { echo "Missing config: $CONFIG" >&2; exit 1; }
-case "$PROXY_DIR" in
-  # A synced binary is a cloud placeholder on some boots; launchd would fail
-  # silently and the gateway would look "installed" while being unreachable.
-  *CloudStorage*|*OneDrive*|*Dropbox*|*"Google Drive"*)
-    echo "Refusing to supervise a binary inside a synced folder: $PROXY_DIR" >&2
-    exit 1 ;;
-esac
-
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
 
 cat > "$PLIST" <<EOF

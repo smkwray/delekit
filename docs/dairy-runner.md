@@ -22,11 +22,11 @@ Tandy and Dairy are not personas. The task prompt defines the work. The uploaded
 ## Prompt overhead
 
 The runner prepends one short access line, a backend limitation line for
-read-only `pi` and `opencode`, and, when applicable, one worktree line. It does not send backend/model/log/report metadata to the model. Use `--no-preamble` or `-NoPreamble` when the task already carries the needed boundary.
+read-only `pi`, `opencode`, and `grok`, and, when applicable, one worktree line. It does not send backend/model/log/report metadata to the model. Use `--no-preamble` or `-NoPreamble` when the task already carries the needed boundary.
 
 ## Profiles and central model mapping
 
-Profiles are backend-specific and resolve through `config/models.env`. Codex and Pi share `terra` (default), `luna`, and `sol`; Pi pins the ChatGPT-subscription `openai-codex` provider rather than an API-key provider. Muse uses `spark` (default) = `muse-spark-1.2-contributor`, and like Codex takes a separate effort, so `--effort`/`-Effort` applies. Antigravity (`agy`) uses `flash-high` (default), `flash-low`, and `pro-high`; its slug carries the effort tier, so no separate `--effort` is sent. Opencode profiles come from `DELEGATE_OPENCODE_PROFILES` in `config/models.env` — that list *is* the profile set and its first entry is the default, so adding or renaming one needs no code change on either platform. An empty list is valid and makes opencode behave like `claude`, where `--model` is required. The shipped defaults sit on OpenCode Zen's free tier so a key with no credits still works; paid and OAuth models are reachable through an explicit `--model`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window. `--model`/`-Model` and supported effort overrides apply to one run. Claude model choices remain explicit because its provider default is better handled by its own CLI.
+Profiles are backend-specific and resolve through `config/models.env`. Codex and Pi share `terra` (default), `luna`, and `sol`; Pi pins the ChatGPT-subscription `openai-codex` provider rather than an API-key provider. Muse uses `spark` (default) = `muse-spark-1.2-contributor`, and like Codex takes a separate effort, so `--effort`/`-Effort` applies. Antigravity (`agy`) uses `flash-high` (default), `flash-low`, and `pro-high`; its slug carries the effort tier, so no separate `--effort` is sent. Opencode profiles come from `DELEGATE_OPENCODE_PROFILES` in `config/models.env` — that list *is* the profile set and its first entry is the default, so adding or renaming one needs no code change on either platform. An empty list is valid and makes opencode behave like `claude`, where `--model` is required. Grok Build uses Grok's CLI model default unless `--model`/`-Model` is supplied; no stale profile mapping is pinned in delekit. The shipped opencode defaults sit on OpenCode Zen's free tier so a key with no credits still works; paid and OAuth models are reachable through an explicit `--model`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window. `--model`/`-Model` and supported effort overrides apply to one run. Claude model choices remain explicit because its provider default is better handled by its own CLI.
 
 **Muse tokens are discounted in exchange for training rights.** The
 `-contributor` model is priced down because the provider may use session content
@@ -140,6 +140,20 @@ two access modes. Measured against opencode 1.18.x on macOS and Windows:
 **`read-only` costs the shell**, as muse's does: no shell, no subagents, no
 tests. The runner adds a line telling the worker to mark command-dependent
 claims unverified rather than narrow the task.
+
+`grok` uses Grok Build's native sandbox and built-in tool allowlist:
+
+| dairy access | Grok flags | what it actually enforces |
+| --- | --- | --- |
+| `read-only` | `--permission-mode dontAsk --sandbox read-only --tools read_file,grep,list_dir --deny 'MCPTool(*)' --no-subagents --disable-web-search` | The model receives only delekit's read/search built-ins; no shell, edit, subagent, web, or MCP tool is exposed. The built-in sandbox remains defense in depth, not the sole boundary. |
+| `workspace-write` | — | **Refused.** Grok's built-in workspace profile has no Windows enforcement, and a built-in profile that cannot be applied warns and continues unenforced. That is not the cross-platform fail-closed boundary this label promises. |
+| `full` | `--permission-mode bypassPermissions --sandbox off` | Unrestricted Grok sandbox; explicit full access only. |
+
+The one-shot path uses `--prompt-file`, `--cwd`, and plain output. Herd's
+resumable `streaming-json` adapter requires Grok 0.2.116 or later, the first
+release with the usage records it uses as response boundaries. Authenticate the
+installed `grok` CLI separately with `grok login` before running a live task;
+installation and wiring do not perform that login.
 
 **A top-level policy is not enough on its own.** opencode merges
 `OPENCODE_PERMISSION` into an agent and then appends that agent's own

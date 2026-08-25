@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step-2+ tests: backend adapters, the detached turn helper, spawn/result/send.
 
-No network. A fake codex/pi/claude/muse/opencode CLI (tests/fake_backend.py) is pointed at via
+No network. A fake codex/pi/claude/muse/opencode/grok CLI (tests/fake_backend.py) is pointed at via
 the backend executable overrides, so
 spawn runs the real detached helper against a controllable JSON event stream.
 """
@@ -46,14 +46,18 @@ class Base(unittest.TestCase):
         os.environ["DELEGATE_CLAUDE_BIN"] = str(FAKE)
         os.environ["DELEGATE_MUSE_BIN"] = str(FAKE)
         os.environ["DELEGATE_OPENCODE_BIN"] = str(FAKE)
+        os.environ["DELEGATE_GROK_BIN"] = str(FAKE)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
         self.proj.cleanup()
         for k in ("DELEGATE_STATE_DIR", "DELEKIT_DEVICE_ID", "DELEGATE_CODEX_BIN",
                   "DELEGATE_PI_BIN", "DELEGATE_CLAUDE_BIN", "DELEGATE_MUSE_BIN",
-                  "DELEGATE_OPENCODE_BIN",
-                  "FAKE_HANG", "FAKE_DELAY_S"):
+                  "DELEGATE_OPENCODE_BIN", "DELEGATE_GROK_BIN",
+                  "FAKE_HANG", "FAKE_DELAY_S", "FAKE_GROK_SESSION_MISMATCH",
+                  "FAKE_GROK_MISSING_SESSION", "FAKE_GROK_EMPTY_FINAL",
+                  "FAKE_GROK_STOP_REASON", "FAKE_GROK_OMIT_FINAL_USAGE",
+                  "FAKE_GROK_VERSION"):
             os.environ.pop(k, None)
 
     def wait_done(self, task, timeout=20.0):
@@ -133,6 +137,51 @@ class TestParsers(unittest.TestCase):
         self.assertIn("--disable-write", b.sandbox_args("read-only"))
         # workspace-write keeps muse's own sandbox on: only approvals are off.
         self.assertEqual(b.sandbox_args("workspace-write"), ["--disable-approval"])
+
+    def test_grok_parser_session_and_terminal_result(self):
+        b = ds.BACKENDS["grok"]
+        self.assertEqual(b.parse({"type": "text", "data": "part"})
+                         .get("message_delta"), "part")
+        self.assertEqual(b.parse({"type": "usage", "stopReason": "tool_use"})
+                         .get("response_boundary"), "1")
+        terminal = b.parse({"type": "end", "sessionId": "g-s1", "stopReason": "end_turn"})
+        self.assertEqual(terminal.get("session_id"), "g-s1")
+        self.assertEqual(terminal.get("terminal_session_id"), "g-s1")
+        self.assertEqual(terminal.get("terminal_stop_reason"), "end_turn")
+        self.assertEqual(b.parse({"type": "end", "sessionId": "g-s1"}).get("terminal"), "1")
+        self.assertIsNone(b.parse({"type": "end", "sessionId": "g-s1"}).get("message"))
+        self.assertEqual(b.parse({"type": "error", "message": "failed"}).get("error"), "failed")
+
+    def test_grok_access_mapping_and_prompt_file(self):
+        b = ds.BACKENDS["grok"]
+        self.assertEqual(b.sandbox_args("read-only"),
+                         ["--permission-mode", "dontAsk", "--sandbox", "read-only", "--tools", "read_file,grep,list_dir",
+                          "--deny", "MCPTool(*)",
+                          "--no-subagents", "--disable-web-search"])
+        with self.assertRaises(ds.HerdError):
+            b.sandbox_args("workspace-write")
+        self.assertEqual(b.sandbox_args("danger-full-access"),
+                         ["--permission-mode", "bypassPermissions", "--sandbox", "off"])
+        argv, stdin_text, cwd = b.spawn_cmd({"task": "g", "exec_root": "/tmp/x", "model": "grok-4.6",
+                                               "effort": "high", "access": "read-only",
+                                               "backend_bin": "/fake/grok",
+                                               "session_id": "123e4567-e89b-12d3-a456-426614174000"})
+        self.assertEqual(stdin_text, "")
+        self.assertEqual(cwd, "/tmp/x")
+        self.assertIn("--prompt-file", argv)
+        self.assertNotIn("the task", argv)
+        self.assertIn("--reasoning-effort", argv)
+        self.assertIn("--output-format", argv)
+        self.assertIn("streaming-json", argv)
+        self.assertIn("--no-auto-update", argv)
+        self.assertIn("--session-id", argv)
+        self.assertNotIn("--resume", argv)
+        resumed = b.resume_cmd({"task": "g", "exec_root": "/tmp/x", "model": "grok-4.6",
+                                "effort": "high", "access": "read-only",
+                                "backend_bin": "/fake/grok",
+                                "session_id": "123e4567-e89b-12d3-a456-426614174000"})[0]
+        self.assertIn("--resume", resumed)
+        self.assertNotIn("--session-id", resumed)
 
 
 class TestOpencodeAdapter(Base):
@@ -346,6 +395,84 @@ class TestSpawnResult(Base):
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], "sess-fake-0001")
         self.assertIn("do the thing", (ds.task_dir("oc") / "report.md").read_text())
+
+    def test_grok_spawn_runs_and_reports(self):
+        self.spawn(name="gk", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gk"))
+        payload = ds.reconcile(ds.task_dir("gk"))
+        self.assertEqual(payload["state"], "done")
+        self.assertRegex(payload["session_id"], r"^[0-9a-f-]{36}$")
+        report = (ds.task_dir("gk") / "report.md").read_text()
+        self.assertIn("do the thing", report)
+        self.assertNotIn("pre-tool response", report)
+
+    def test_grok_session_mismatch_fails_closed(self):
+        os.environ["FAKE_GROK_SESSION_MISMATCH"] = "1"
+        try:
+            self.spawn(name="gk-bad", backend="grok", mode="readonly")
+            self.assertTrue(self.wait_done("gk-bad"))
+            payload = ds.reconcile(ds.task_dir("gk-bad"))
+        finally:
+            os.environ.pop("FAKE_GROK_SESSION_MISMATCH", None)
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "grok-protocol")
+
+    def test_grok_workspace_is_refused_before_state(self):
+        rc = self.spawn(name="gk-ws", backend="grok", mode="workspace")
+        self.assertEqual(rc, 2)
+        self.assertFalse(ds.task_dir("gk-ws").exists())
+
+    def test_grok_terminal_session_is_required(self):
+        os.environ["FAKE_GROK_MISSING_SESSION"] = "1"
+        self.spawn(name="gk-no-session", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gk-no-session"))
+        payload = ds.reconcile(ds.task_dir("gk-no-session"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "grok-protocol")
+        self.assertIn("omitted sessionId", (ds.task_dir("gk-no-session") / "report.md").read_text())
+
+    def test_grok_empty_final_does_not_publish_pretool_text(self):
+        os.environ["FAKE_GROK_EMPTY_FINAL"] = "1"
+        self.spawn(name="gk-empty-final", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gk-empty-final"))
+        payload = ds.reconcile(ds.task_dir("gk-empty-final"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "empty-report")
+        report = (ds.task_dir("gk-empty-final") / "report.md").read_text()
+        self.assertIn("no final message", report)
+        self.assertNotIn("pre-tool response", report)
+
+    def test_grok_non_success_stop_reason_is_not_done(self):
+        os.environ["FAKE_GROK_STOP_REASON"] = "max_tokens"
+        self.spawn(name="gk-max-tokens", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gk-max-tokens"))
+        payload = ds.reconcile(ds.task_dir("gk-max-tokens"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "grok-protocol")
+        self.assertIn("max_tokens", (ds.task_dir("gk-max-tokens") / "report.md").read_text())
+
+    def test_grok_final_usage_boundary_is_required(self):
+        os.environ["FAKE_GROK_OMIT_FINAL_USAGE"] = "1"
+        self.spawn(name="gk-no-final-usage", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gk-no-final-usage"))
+        payload = ds.reconcile(ds.task_dir("gk-no-final-usage"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "grok-protocol")
+        self.assertIn("response boundary", (ds.task_dir("gk-no-final-usage") / "report.md").read_text())
+
+    def test_grok_below_streaming_schema_floor_is_refused(self):
+        os.environ["FAKE_GROK_VERSION"] = "grok 0.2.115 (old)"
+        rc = self.spawn(name="gk-old", backend="grok", mode="readonly")
+        self.assertEqual(rc, 7)
+        self.assertFalse(ds.task_dir("gk-old").exists())
+
+    def test_grok_default_preamble_discloses_missing_shell(self):
+        quiet_main(["spawn", "readonly", "inspect", "--json", "--project-root", self.proj.name,
+                    "--model", "m", "--name", "gk-pre", "--backend", "grok",
+                    "--stall-after", "60", "--deadline", "600"])
+        self.assertTrue(self.wait_done("gk-pre"))
+        prompt = (ds.task_dir("gk-pre") / "prompt.md").read_text()
+        self.assertIn("no shell, write tools, subagents, web search, or test execution", prompt)
 
     def test_detached_backend_actually_receives_the_isolation_env(self):
         # The oracle the unit assertions cannot provide. env_overrides() can be
@@ -780,6 +907,28 @@ class TestSendResume(Base):
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], "sess-fake-0001")
         self.assertIn("resumed:", (ds.task_dir("ocr") / "report.md").read_text())
+
+    def test_grok_send_resumes_via_session_id(self):
+        self.spawn(prompt="first turn", name="gkr", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gkr"))
+        first_session = ds.reconcile(ds.task_dir("gkr"))["session_id"]
+        self.assertEqual(quiet_main(["send", "gkr", "second turn", "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("gkr"))
+        payload = ds.reconcile(ds.task_dir("gkr"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual(payload["session_id"], first_session)
+        self.assertIn("resumed:", (ds.task_dir("gkr") / "report.md").read_text())
+
+    def test_grok_send_rechecks_streaming_schema_floor(self):
+        self.spawn(prompt="first turn", name="gkr-old", backend="grok", mode="readonly")
+        self.assertTrue(self.wait_done("gkr-old"))
+        old_report = (ds.task_dir("gkr-old") / "report.md").read_text()
+        os.environ["FAKE_GROK_VERSION"] = "0.2.115"
+        rc = quiet_main(["send", "gkr-old", "second turn", "--json", "--no-preamble"])
+        self.assertEqual(rc, 7)
+        payload = ds.reconcile(ds.task_dir("gkr-old"))
+        self.assertEqual(payload["state"], "done")
+        self.assertEqual((ds.task_dir("gkr-old") / "report.md").read_text(), old_report)
 
     def test_pi_send_resumes_via_session_id(self):
         self.spawn(prompt="first turn", name="pr", backend="pi", mode="readonly")

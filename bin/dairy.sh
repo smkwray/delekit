@@ -40,12 +40,13 @@ Prompt input (choose one):
   --prompt-stdin           read task from stdin (also automatic for piped stdin)
 
 Core options:
-  --backend NAME           codex (default), pi, claude, muse, agy, or opencode
+  --backend NAME           codex (default), pi, claude, muse, agy, opencode, or grok
   --profile NAME           backend-specific model profile from config/models.env:
                            codex/pi: terra (default), luna, sol
                            muse: spark (default)
                            agy: flash-high (default), flash-low, pro-high
                            opencode: from DELEGATE_OPENCODE_PROFILES (first = default)
+                           grok: pass --model for a pinned model, or use Grok's CLI default
   --model ID               explicit per-run override; REQUIRED for --backend claude,
                            which has no profile mapping
   --effort LEVEL           explicit reasoning effort override
@@ -136,7 +137,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$BACKEND" in codex|pi|claude|muse|agy|opencode) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
+case "$BACKEND" in codex|pi|claude|muse|agy|opencode|grok) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
 
@@ -203,8 +204,17 @@ if [[ "$BACKEND" == "opencode" && "$ACCESS" == "workspace-write" ]]; then
   echo "Run opencode with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
   exit 2
 fi
-if [[ "$BACKEND" == "opencode" && "$FAST" -eq 1 ]]; then
-  echo "--fast is a Codex backend option and is not supported by opencode." >&2
+# Grok's built-in workspace profile is enforced only by Landlock/Seatbelt. It is
+# unavailable on Windows, and built-in profile application failures warn and
+# continue without enforcement, so it cannot honestly carry this cross-platform
+# access label.
+if [[ "$BACKEND" == "grok" && "$ACCESS" == "workspace-write" ]]; then
+  echo "grok has no cross-platform fail-closed workspace-write mode." >&2
+  echo "Run grok with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
+  exit 2
+fi
+if [[ "$BACKEND" == "opencode" || "$BACKEND" == "grok" ]] && [[ "$FAST" -eq 1 ]]; then
+  echo "--fast is a Codex backend option and is not supported by $BACKEND." >&2
   exit 2
 fi
 
@@ -362,6 +372,9 @@ compose_prompt() {
     fi
     if [[ "$BACKEND" == "pi" && "$ACCESS" == "read-only" ]]; then
       printf '%s\n\n' '**Pi limitation:** Read-only Pi has file/search tools but no shell or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.'
+    fi
+    if [[ "$BACKEND" == "grok" && "$ACCESS" == "read-only" ]]; then
+      printf '%s\n\n' '**Grok limitation:** Read-only Grok has file/search tools but no shell, write tools, subagents, web search, or test execution. Do not narrow scope; mark command-dependent claims unverified and return NO-GO when they are decisive.'
     fi
     if [[ "$WORKTREE" -eq 1 ]]; then
       printf '%s\n\n' '**Isolation: Git worktree.** Stay in the current worktree; do not switch branches, touch the main checkout, push, merge, or remove the worktree.'
@@ -538,6 +551,20 @@ case "$BACKEND" in
        OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DB="${prefix}.opencode.db" \
        env -u OPENCODE_CONFIG -u OPENCODE_AUTH_CONTENT \
        "$BACKEND_BIN" "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
+    ;;
+  grok)
+    # Grok Build headless mode: prompt-file avoids argv limits and plain stdout
+    # is the one-shot report. Herd uses native streaming-json with the same
+    # prompt-file/cwd/access mapping so the two runners share one CLI contract.
+    args=(--no-auto-update --prompt-file "$prompt_log" --cwd "$EXEC_ROOT" --output-format plain)
+    [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
+    [[ -n "$EFFORT" ]] && args+=(--reasoning-effort "$EFFORT")
+    case "$ACCESS" in
+      read-only) args+=(--permission-mode dontAsk --sandbox read-only --tools read_file,grep,list_dir --deny 'MCPTool(*)' --no-subagents --disable-web-search) ;;
+      danger-full-access) args+=(--permission-mode bypassPermissions --sandbox off) ;;
+    esac
+    (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}" ) >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
   agy)

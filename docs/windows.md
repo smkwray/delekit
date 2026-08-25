@@ -9,7 +9,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\bin\install-windows.ps1 -AddToUserPath
 ```
 
-The installer creates directory junctions for generated agents and the Skill. Junctions track future renders without requiring the same OneDrive path on every machine.
+The installer creates directory junctions for generated agents and the Skill.
+Junctions track future renders without requiring the same checkout path on every
+machine.
 
 ```text
 %USERPROFILE%\.claude\agents\delekit
@@ -55,4 +57,7 @@ Open a new terminal after adding the user PATH, then run:
 .\bin\doctor-windows.ps1
 ```
 
-Execution policy, enterprise controls, filesystem type, or OneDrive status may block junctions or scripts. Do not globally weaken policy. Use `-Copy` or obtain approval for the narrow local change. Copied generated files must be reinstalled after future renders.
+Execution policy, enterprise controls, filesystem type, or local filesystem state
+may block junctions or scripts. Do not globally weaken policy. Use `-Copy` or
+obtain approval for the narrow local change. Copied generated files must be
+reinstalled after future renders.
