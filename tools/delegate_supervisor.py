@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """herd: detached, resumable, steerable headless delegate workers.
 
-Backends: codex, pi, claude, muse, opencode, grok.
+Backends: codex, pi, claude, muse, opencode, grok, cursor.
 
 Stdlib only. See docs/detached-runner.md for the design. This is the shared
 cross-platform core; bin/herd.sh and bin/herd.ps1 are thin shims onto it.
@@ -294,6 +294,10 @@ def _text_from_content(content: Any) -> str | None:
 class Backend:
     name = ""
     bin_env = ""
+    # PATH names to try after DELEGATE_*_BIN. Override when the backend word is
+    # not the CLI name -- Cursor's CLI is `cursor-agent`, never PATH `agent`
+    # (Grok Build occupies that name on this kit).
+    cli_names: tuple[str, ...] = ()
 
     def resolved_bin(self, meta: dict[str, Any]) -> str:
         """The exact binary this task was admitted with, if one was pinned.
@@ -314,12 +318,15 @@ class Backend:
             if not (os.path.isfile(override) and os.access(override, os.X_OK)):
                 raise HerdError(7, f"{self.bin_env}={override} is not executable")
             return os.path.abspath(override)
-        found = shutil.which(self.name)
-        if not found:
-            raise HerdError(7, f"{self.name} CLI not found on PATH (or set {self.bin_env})")
-        # Absolute: backends run with cwd=exec_root, where a relative path is a
-        # different file, or none.
-        return os.path.abspath(found)
+        names = self.cli_names or (self.name,)
+        for cand in names:
+            found = shutil.which(cand)
+            if found:
+                # Absolute: backends run with cwd=exec_root, where a relative
+                # path is a different file, or none.
+                return os.path.abspath(found)
+        shown = names[0]
+        raise HerdError(7, f"{shown} CLI not found on PATH (or set {self.bin_env})")
 
     def sandbox_args(self, access: str) -> list[str]:
         raise NotImplementedError
@@ -794,9 +801,98 @@ class GrokBackend(Backend):
         return out
 
 
+class CursorBackend(Backend):
+    """Cursor Agent CLI (`cursor-agent`) in headless print + stream-json mode.
+
+    Distinct from `--backend grok` (Grok Build). PATH `agent` is Grok Build on
+    this kit, so this adapter looks up `cursor-agent` only.
+
+    Measured against cursor-agent 2026.09.02-c22c1a3 on macOS (Pro login):
+
+    - `-p --output-format stream-json` emits Claude-shaped events: `session_id`
+      on every line, `system/init`, `assistant` text, and a terminal
+      `result.subtype=success`. `--resume <id>` continues that chat. Dairy uses
+      `text` for the one-shot report; herd uses `stream-json`. A matching
+      nonempty `result.subtype=success` authorizes the turn; the publishable
+      answer is the last matching-session `assistant` message, not the terminal
+      `result` string (which can concatenate earlier assistant text). A
+      successful result with no final assistant fails closed. Intermediate
+      assistant text does not itself authorize `done`. Anything else fails as
+      `cursor-protocol`.
+    - `--print` without `--force` still wrote a file (docs claim otherwise).
+      `--mode plan` without `--force` hangs on a shell permission prompt.
+      `--force --mode plan` is the honest read-only: the write tool is denied,
+      a shell redirect is denied, and a read-only shell (`cat`) works.
+    - `--force --sandbox enabled` wrote a file *outside* `--workspace`. There
+      is no fail-closed confined write mode, so workspace-write is refused.
+    """
+
+    name = "cursor"
+    bin_env = "DELEGATE_CURSOR_BIN"
+    cli_names = ("cursor-agent",)
+
+    def sandbox_args(self, access: str) -> list[str]:
+        if access == "read-only":
+            # Cursor's native sandbox is unavailable on Windows. Plan mode
+            # remains the read-only boundary there, with the CLI's allowlist
+            # mode explicitly selected so the child can start.
+            sandbox = "disabled" if sys.platform == "win32" else "enabled"
+            return ["--force", "--mode", "plan", "--sandbox", sandbox]
+        if access == "workspace-write":
+            raise HerdError(2, "cursor has no fail-closed workspace-write mode: "
+                               "--force --sandbox enabled wrote outside --workspace. "
+                               "Use readonly, or full for explicit unrestricted writes; "
+                               "use codex/claude for confined writes")
+        if access == "danger-full-access":
+            return ["--force", "--sandbox", "disabled"]
+        raise HerdError(2, f"unsupported cursor access mode: {access}")
+
+    def _base(self, meta: dict[str, Any]) -> list[str]:
+        argv = [self.resolved_bin(meta), "-p", "--output-format", "stream-json",
+                "--trust", "--workspace", meta["exec_root"]]
+        if meta.get("model"):
+            argv += ["--model", meta["model"]]
+        argv += self.sandbox_args(meta["access"])
+        return argv
+
+    def spawn_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta), meta["prompt"], meta["exec_root"]
+
+    def resume_cmd(self, meta: dict[str, Any]) -> tuple[list[str], str, str]:
+        return self._base(meta) + ["--resume", meta["session_id"]], meta["prompt"], meta["exec_root"]
+
+    def parse(self, obj: dict[str, Any]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if isinstance(obj.get("session_id"), str):
+            out["session_id"] = obj["session_id"]
+        t = obj.get("type")
+        if t == "assistant":
+            # Assistant text is the publishable answer. It must not itself
+            # authorize done: that requires a matching successful result.
+            text = _text_from_content((obj.get("message") or {}).get("content"))
+            if text:
+                out["assistant"] = text
+        elif t == "result":
+            out["terminal"] = "1"
+            if isinstance(obj.get("session_id"), str):
+                out["terminal_session_id"] = obj["session_id"]
+            subtype = obj.get("subtype")
+            is_error = obj.get("is_error")
+            result = obj.get("result")
+            if is_error or subtype != "success":
+                out["error"] = (
+                    f"Cursor ended with non-success result "
+                    f"subtype={subtype!s} is_error={is_error!s}.")
+            elif not isinstance(result, str) or not result.strip():
+                out["error"] = "Cursor successful result omitted a usable answer."
+        elif t == "thinking" and isinstance(obj.get("text"), str):
+            out["thinking"] = obj["text"]
+        return out
+
+
 BACKENDS: dict[str, Backend] = {
     "codex": CodexBackend(), "pi": PiBackend(), "claude": ClaudeBackend(), "muse": MuseBackend(),
-    "opencode": OpencodeBackend(), "grok": GrokBackend(),
+    "opencode": OpencodeBackend(), "grok": GrokBackend(), "cursor": CursorBackend(),
 }
 
 
@@ -1291,6 +1387,8 @@ def run_turn(task: str, mode: str) -> int:
         grok_response_chunks: list[str] = []
         grok_last_complete: str | None = None
         grok_terminal = False
+        cursor_last_assistant: str | None = None
+        cursor_terminal = False
         protocol_error: list[str | None] = [None]
         saw_eof = False
         with open(tdir / "events.jsonl", "a", encoding="utf-8") as events:
@@ -1322,14 +1420,23 @@ def run_turn(task: str, mode: str) -> int:
                     continue
                 parsed = backend.parse(obj)
                 emitted_session = parsed.get("session_id")
+                abort_on_mismatch = False
                 if emitted_session:
-                    if backend.name == "grok" and meta.get("session_id"):
+                    if backend.name in ("grok", "cursor") and meta.get("session_id"):
                         if emitted_session != meta["session_id"]:
-                            protocol_error[0] = (
-                                f"Grok emitted session {emitted_session}, expected {meta['session_id']}.")
+                            label = "Grok" if backend.name == "grok" else "Cursor"
+                            protocol_error[0] = protocol_error[0] or (
+                                f"{label} emitted session {emitted_session}, expected {meta['session_id']}.")
+                            abort_on_mismatch = True
                     elif not meta.get("session_id"):
                         meta["session_id"] = emitted_session
                         atomic_write_json(tdir / "meta.json", meta)
+                if abort_on_mismatch:
+                    # A known-wrong session must not keep its action channel
+                    # open until natural exit. Classification still uses
+                    # protocol_error, not the induced kill/exit code.
+                    _terminate_child(proc)
+                    break
                 if backend.name == "grok":
                     if "message_delta" in parsed:
                         grok_response_chunks.append(parsed["message_delta"])
@@ -1349,6 +1456,8 @@ def run_turn(task: str, mode: str) -> int:
                         elif meta.get("session_id") and terminal_session != meta["session_id"]:
                             protocol_error[0] = protocol_error[0] or (
                                 f"Grok terminal session {terminal_session}, expected {meta['session_id']}.")
+                            _terminate_child(proc)
+                            break
                         terminal_reason = parsed.get("terminal_stop_reason")
                         if not terminal_reason:
                             protocol_error[0] = protocol_error[0] or (
@@ -1361,6 +1470,22 @@ def run_turn(task: str, mode: str) -> int:
                                 "Grok emitted terminal end before the final usage response boundary.")
                     if parsed.get("error"):
                         protocol_error[0] = protocol_error[0] or parsed["error"]
+                elif backend.name == "cursor":
+                    if parsed.get("assistant"):
+                        cursor_last_assistant = parsed["assistant"]
+                    if parsed.get("error"):
+                        protocol_error[0] = protocol_error[0] or parsed["error"]
+                    if parsed.get("terminal"):
+                        cursor_terminal = True
+                        terminal_session = parsed.get("terminal_session_id")
+                        if not terminal_session:
+                            protocol_error[0] = protocol_error[0] or (
+                                "Cursor terminal result omitted session_id.")
+                        elif meta.get("session_id") and terminal_session != meta["session_id"]:
+                            protocol_error[0] = protocol_error[0] or (
+                                f"Cursor terminal session {terminal_session}, expected {meta['session_id']}.")
+                            _terminate_child(proc)
+                            break
                 elif parsed.get("message"):
                     last_message = parsed["message"]
                 elif parsed.get("message_delta"):
@@ -1407,7 +1532,13 @@ def run_turn(task: str, mode: str) -> int:
             last_message = grok_last_complete if (grok_last_complete or "").strip() else None
             if not grok_terminal and protocol_error[0] is None:
                 protocol_error[0] = "Grok stream ended without its terminal end event."
-        if last_message is not None:
+        elif backend.name == "cursor":
+            last_message = cursor_last_assistant if (cursor_last_assistant or "").strip() else None
+            if not cursor_terminal and protocol_error[0] is None:
+                protocol_error[0] = "Cursor stream ended without a successful result event."
+            elif cursor_terminal and protocol_error[0] is None and last_message is None:
+                protocol_error[0] = "Cursor successful result omitted a final assistant message."
+        if last_message is not None and protocol_error[0] is None:
             (tdir / "report.md").write_text(last_message, encoding="utf-8")
         cap_events(tdir)
 
@@ -1419,7 +1550,9 @@ def run_turn(task: str, mode: str) -> int:
             fail("failed", "stream-error",
                  "The delegate's output stream failed mid-turn; the answer is incomplete.")
         elif protocol_error[0] is not None:
-            fail("failed", "grok-protocol", f"Grok protocol error: {protocol_error[0]}")
+            proto = f"{backend.name}-protocol"
+            label = "Grok" if backend.name == "grok" else "Cursor"
+            fail("failed", proto, f"{label} protocol error: {protocol_error[0]}")
         elif kill_reason[0] == "no-exit":
             fail("failed", "no-exit",
                  "Delegate closed its output but did not exit; it was stopped.")
@@ -1579,12 +1712,21 @@ MUSE_DEFAULT_PROFILE = "spark"
 # time a slug moved. An empty list is valid and makes opencode behave like the
 # claude backend, where --model is required and the kit pins nothing.
 OPENCODE_PROFILES_KEY = "DELEGATE_OPENCODE_PROFILES"
+CURSOR_PROFILES_KEY = "DELEGATE_CURSOR_PROFILES"
 
 
 def opencode_profiles(env: dict[str, str] | None = None) -> list[str]:
     """Opencode profile names from config/models.env; the first is the default."""
     env = load_models_env() if env is None else env
     return [n.strip() for n in env.get(OPENCODE_PROFILES_KEY, "").split(",") if n.strip()]
+
+
+def cursor_profiles(env: dict[str, str] | None = None) -> list[str]:
+    """Cursor profile names from config/models.env; the first is the default."""
+    env = load_models_env() if env is None else env
+    return [n.strip() for n in env.get(CURSOR_PROFILES_KEY, "").split(",") if n.strip()]
+
+
 # The opencode version floor is DATA, in config/models.env, not a constant here:
 # versions move constantly, and raising, lowering, or removing the floor must not
 # need a code edit on two platforms. An empty setting disables the check.
@@ -1806,8 +1948,29 @@ def resolve_model_effort(backend: str, profile: str, profile_explicit: bool,
         # The effort is validated against the SELECTED MODEL's declared variants
         # at spawn time, not against a static list -- there is no universal set.
         return model, effort
+    if backend == "cursor":
+        if effort:
+            raise HerdError(2, "--effort is not supported for cursor; effort is part of the "
+                               "catalog id. Use --profile grok-fast or pass --model")
+        profiles = cursor_profiles(env)
+        if profile_explicit:
+            if profile not in profiles:
+                listed = ", ".join(profiles) if profiles else "<none configured>"
+                raise HerdError(2, f"cursor profile must be one of {listed} "
+                                   f"(set {CURSOR_PROFILES_KEY} in config/models.env)")
+            prof = profile
+        else:
+            prof = profiles[0] if profiles else ""
+        if prof:
+            key = prof.upper().replace("-", "_")
+            model = model or env.get(f"DELEGATE_CURSOR_MODEL_{key}")
+        if not model:
+            raise HerdError(2, "no cursor model: pass --model, or set "
+                               f"{CURSOR_PROFILES_KEY} and DELEGATE_CURSOR_MODEL_* "
+                               "in config/models.env")
+        return model, None
     if profile_explicit:
-        raise HerdError(2, f"--profile resolves a model only for codex, muse, and opencode; "
+        raise HerdError(2, f"--profile resolves a model only for codex, muse, opencode, and cursor; "
                            f"pass --model for --backend {backend}")
     return model, effort
 
@@ -1880,7 +2043,11 @@ def cmd_spawn(args: argparse.Namespace) -> int:
                            "sandbox is unsupported on Windows and built-in profiles continue unenforced "
                            "when application fails. Use readonly, or full for explicit unrestricted writes; "
                            "use codex/claude for confined writes")
-    if args.backend in ("opencode", "grok") and args.fast:
+    if args.backend == "cursor" and access == "workspace-write":
+        raise HerdError(2, "cursor has no fail-closed workspace-write mode: --force --sandbox enabled "
+                           "wrote outside --workspace. Use readonly, or full for explicit unrestricted writes; "
+                           "use codex/claude for confined writes")
+    if args.backend in ("opencode", "grok", "cursor") and args.fast:
         raise HerdError(2, f"--fast is a Codex backend option and is not supported by {args.backend}")
     prompt = resolve_prompt(args)
     if not prompt.strip():
@@ -1892,7 +2059,7 @@ def cmd_spawn(args: argparse.Namespace) -> int:
     model, effort = resolve_model_effort(args.backend, args.profile or DEFAULT_PROFILE,
                                          args.profile is not None, args.model, args.effort)
     admitted_bin = None
-    if args.backend in ("opencode", "grok"):
+    if args.backend in ("opencode", "grok", "cursor"):
         admitted_bin = BACKENDS[args.backend].locate_bin()
     if args.backend == "opencode":
         require_opencode_version(admitted_bin)
@@ -2189,6 +2356,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "muse_on_path": shutil.which("muse") is not None,
         "opencode_on_path": shutil.which("opencode") is not None,
         "grok_on_path": shutil.which("grok") is not None,
+        "cursor_agent_on_path": shutil.which("cursor-agent") is not None,
         # Report the binary a spawn would ACTUALLY use, which is the
         # DELEGATE_OPENCODE_BIN override when one is set -- doctor reporting the
         # PATH copy while spawn used another is exactly the kind of mismatch that
@@ -2216,7 +2384,16 @@ def cmd_run_turn(args: argparse.Namespace) -> int:
 # CLI
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="herd", description="Detached delegate workers (codex/pi/claude/muse/opencode/grok).")
+    parser = argparse.ArgumentParser(
+        prog="herd",
+        description="Detached delegate workers (codex/pi/claude/muse/opencode/grok/cursor).",
+        epilog=("Canonical start: herd spawn readonly -f task.md\n"
+                 "Backend decides the runner: agy runs on dairy only, everything\n"
+                 "listed above runs on both. When both work, prefer herd -- dairy\n"
+                 "blocks and cannot be steered, and `herd result --wait` still\n"
+                 "gives you a blocking wait."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add_json(sp: argparse.ArgumentParser) -> None:
@@ -2231,14 +2408,23 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--stall-after", type=int, default=DEFAULT_STALL_AFTER_S)
         sp.add_argument("--deadline", type=int, default=DEFAULT_DEADLINE_S)
 
-    sp = sub.add_parser("spawn"); add_json(sp)
+    sp = sub.add_parser(
+        "spawn",
+        help="start a detached worker",
+        description="Start a detached worker. The verb comes before the access mode.",
+        epilog=("Example: herd spawn readonly -f task.md --backend grok\n"
+                "agy is NOT available here -- it has no herd backend, so --backend agy\n"
+                "fails even with an explicit --model. Use dairy for agy.\n"
+                "Otherwise prefer herd: dairy blocks and cannot be steered."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    ); add_json(sp)
     sp.add_argument("mode", choices=list(ACCESS_BY_MODE))
     add_prompt(sp); add_deadlines(sp)
     sp.add_argument("--backend", default="codex")
     # Opencode's names come from config/models.env, so the accepted set is built
     # at parse time rather than frozen in the source.
     sp.add_argument("--profile", default=None,
-                    choices=list(PROFILES) + list(MUSE_PROFILES) + opencode_profiles())
+                    choices=list(PROFILES) + list(MUSE_PROFILES) + opencode_profiles() + cursor_profiles())
     sp.add_argument("--model"); sp.add_argument("--effort")
     sp.add_argument("--access", "--sandbox", dest="access")
     sp.add_argument("--project-root", dest="project_root")

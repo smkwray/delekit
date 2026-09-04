@@ -40,13 +40,14 @@ Prompt input (choose one):
   --prompt-stdin           read task from stdin (also automatic for piped stdin)
 
 Core options:
-  --backend NAME           codex (default), pi, claude, muse, agy, opencode, or grok
+  --backend NAME           codex (default), pi, claude, muse, agy, opencode, grok, or cursor
   --profile NAME           backend-specific model profile from config/models.env:
                            codex/pi: terra (default), luna, sol
                            muse: spark (default)
                            agy: flash-high (default), flash-low, pro-high
                            opencode: from DELEGATE_OPENCODE_PROFILES (first = default)
                            grok: pass --model for a pinned model, or use Grok's CLI default
+                           cursor: from DELEGATE_CURSOR_PROFILES (first = default)
   --model ID               explicit per-run override; REQUIRED for --backend claude,
                            which has no profile mapping
   --effort LEVEL           explicit reasoning effort override
@@ -67,6 +68,11 @@ Mode aliases:
   full                -> danger-full-access, explicit only
 
 --access overrides the mode default for a single run.
+
+Lifecycle:
+  dairy is one-shot and blocking. Prefer herd unless the backend forces dairy or
+  you specifically want a blocking one-shot; see `herd spawn --help`.
+  --backend agy runs here ONLY: agy has no herd backend.
 HELP
 }
 
@@ -137,7 +143,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$BACKEND" in codex|pi|claude|muse|agy|opencode|grok) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
+case "$BACKEND" in codex|pi|claude|muse|agy|opencode|grok|cursor) ;; *) echo "Unsupported backend: $BACKEND" >&2; exit 2 ;; esac
 case "$ACCESS" in read-only|workspace-write|danger-full-access) ;; *) echo "Invalid access: $ACCESS" >&2; exit 2 ;; esac
 case "$DIRTY_POLICY" in fail|ignore) ;; *) echo "dirty-policy must be fail or ignore" >&2; exit 2 ;; esac
 
@@ -172,8 +178,29 @@ elif [[ "$BACKEND" == "opencode" ]]; then
     echo "Set DELEGATE_OPENCODE_PROFILES in config/models.env, or pass --model." >&2
     exit 2
   fi
+elif [[ "$BACKEND" == "cursor" ]]; then
+  # Same data-driven shape as opencode: DELEGATE_CURSOR_PROFILES IS the list
+  # and its first entry is the default. An empty list means --model is required.
+  cur_profiles=""
+  IFS=',' read -r -a cur_raw <<< "${DELEGATE_CURSOR_PROFILES:-}"
+  for cur_name in "${cur_raw[@]:-}"; do
+    cur_name="${cur_name//[[:space:]]/}"
+    [[ -n "$cur_name" ]] && cur_profiles="${cur_profiles}${cur_name} "
+  done
+  if [[ -z "$PROFILE" ]]; then
+    PROFILE="${cur_profiles%% *}"
+  elif [[ " $cur_profiles" != *" $PROFILE "* ]]; then
+    echo "cursor profile must be one of: ${cur_profiles:-<none configured>}" >&2
+    echo "Set DELEGATE_CURSOR_PROFILES in config/models.env, or pass --model." >&2
+    exit 2
+  fi
+  if [[ -n "$EFFORT" ]]; then
+    echo "--effort is not supported for cursor; effort is part of the catalog id." >&2
+    echo "Use --profile grok-fast or pass --model." >&2
+    exit 2
+  fi
 elif [[ "$PROFILE_EXPLICIT" -eq 1 ]]; then
-  echo "--profile resolves a model only for the codex, pi, muse, agy, and opencode backends; config/models.env holds their IDs." >&2
+  echo "--profile resolves a model only for the codex, pi, muse, agy, opencode, and cursor backends; config/models.env holds their IDs." >&2
   echo "For --backend $BACKEND, pass --model explicitly." >&2
   exit 2
 else
@@ -213,7 +240,15 @@ if [[ "$BACKEND" == "grok" && "$ACCESS" == "workspace-write" ]]; then
   echo "Run grok with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
   exit 2
 fi
-if [[ "$BACKEND" == "opencode" || "$BACKEND" == "grok" ]] && [[ "$FAST" -eq 1 ]]; then
+# Cursor Agent: --force --sandbox enabled wrote a file outside --workspace
+# (measured 2026-09-04, cursor-agent 2026.09.02-c22c1a3). There is no confined
+# write mode to label, so refuse workspace-write as for grok/opencode/pi.
+if [[ "$BACKEND" == "cursor" && "$ACCESS" == "workspace-write" ]]; then
+  echo "cursor has no fail-closed workspace-write mode: sandbox enabled still wrote outside --workspace." >&2
+  echo "Run cursor with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes." >&2
+  exit 2
+fi
+if [[ "$BACKEND" == "opencode" || "$BACKEND" == "grok" || "$BACKEND" == "cursor" ]] && [[ "$FAST" -eq 1 ]]; then
   echo "--fast is a Codex backend option and is not supported by $BACKEND." >&2
   exit 2
 fi
@@ -249,6 +284,7 @@ muse_model_var="DELEGATE_MUSE_MODEL_${profile_upper}"
 muse_effort_var="DELEGATE_MUSE_EFFORT_${profile_upper}"
 opencode_model_var="DELEGATE_OPENCODE_MODEL_${profile_upper}"
 opencode_variant_var="DELEGATE_OPENCODE_VARIANT_${profile_upper}"
+cursor_model_var="DELEGATE_CURSOR_MODEL_${profile_upper}"
 if [[ "$BACKEND" == "codex" || "$BACKEND" == "pi" ]]; then
   [[ -n "$MODEL" ]] || MODEL="${!model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No model configured for profile $PROFILE" >&2; exit 2; }
@@ -304,6 +340,15 @@ elif [[ "$BACKEND" == "agy" ]]; then
   # --model overrides the profile for a single run.
   [[ -n "$MODEL" ]] || MODEL="${!agy_model_var:-}"
   [[ -n "$MODEL" ]] || { echo "No agy model configured for profile $PROFILE" >&2; exit 2; }
+elif [[ "$BACKEND" == "cursor" ]]; then
+  if [[ -n "$PROFILE" ]]; then
+    [[ -n "$MODEL" ]] || MODEL="${!cursor_model_var:-}"
+  fi
+  if [[ -z "$MODEL" ]]; then
+    echo "No cursor model: pass --model, or set DELEGATE_CURSOR_PROFILES and" >&2
+    echo "DELEGATE_CURSOR_MODEL_* in config/models.env." >&2
+    exit 2
+  fi
 fi
 
 find_project_root() {
@@ -427,8 +472,10 @@ if [[ -n "$BACKEND_BIN" ]]; then
   [[ -f "$BACKEND_BIN" && -x "$BACKEND_BIN" ]] || \
     { echo "$backend_bin_var=$BACKEND_BIN is not an executable file" >&2; exit 127; }
 else
-  BACKEND_BIN="$(command -v "$BACKEND" 2>/dev/null || true)"
-  [[ -n "$BACKEND_BIN" ]] || { echo "$BACKEND CLI not found in PATH (or set $backend_bin_var)" >&2; exit 127; }
+  BACKEND_CLI="$BACKEND"
+  [[ "$BACKEND" == "cursor" ]] && BACKEND_CLI="cursor-agent"
+  BACKEND_BIN="$(command -v "$BACKEND_CLI" 2>/dev/null || true)"
+  [[ -n "$BACKEND_BIN" ]] || { echo "$BACKEND_CLI CLI not found in PATH (or set $backend_bin_var)" >&2; exit 127; }
 fi
 mkdir -p "$LOG_DIR"
 TTL_DAYS="${RUNNER_LOG_TTL_DAYS:-7}"
@@ -567,6 +614,22 @@ case "$BACKEND" in
     (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}" ) >"$stdout_log" 2>"$stderr_log" || exit_code=$?
     [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
     ;;
+  cursor)
+    # Cursor Agent headless print mode. The prompt is stdin (measured); --trust
+    # skips the workspace prompt; --workspace pins the project. Dairy uses text
+    # for the one-shot report; herd uses stream-json with the same access flags.
+    # Read-only is --force --mode plan: without --force, plan mode hangs on a
+    # shell permission prompt; with it, write tools and shell redirects are
+    # denied while a read-only shell still works (measured 2026-09-04).
+    args=(-p --output-format text --trust --workspace "$EXEC_ROOT")
+    [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
+    case "$ACCESS" in
+      read-only) args+=(--force --mode plan --sandbox enabled) ;;
+      danger-full-access) args+=(--force --sandbox disabled) ;;
+    esac
+    (cd "$EXEC_ROOT" && "$BACKEND_BIN" "${args[@]}" <<< "$COMPOSED_PROMPT") >"$stdout_log" 2>"$stderr_log" || exit_code=$?
+    [[ -s "$stdout_log" ]] && cp "$stdout_log" "$report_file"
+    ;;
   agy)
     # Antigravity CLI, headless print mode (-p): the prompt is the flag's value and
     # the final answer is plain text on stdout (no stdin piping). Access is limited
@@ -634,9 +697,9 @@ HANDOFF
 fi
 
 touch "$done_file"
-printf '{"status":"%s","exit_code":%s,"backend":"%s","profile":"%s","model":"%s","access":"%s","project_root":"%s","execution_root":"%s","report":"%s","stdout":"%s","stderr":"%s","worktree":"%s","branch":"%s"}\n' \
+printf '{"status":"%s","exit_code":%s,"backend":"%s","profile":"%s","model":"%s","effort":"%s","access":"%s","project_root":"%s","execution_root":"%s","report":"%s","stdout":"%s","stderr":"%s","worktree":"%s","branch":"%s"}\n' \
   "$([[ "$exit_code" -eq 0 ]] && echo completed || echo failed)" "$exit_code" \
-  "$(json_escape "$BACKEND")" "$(json_escape "$PROFILE")" "$(json_escape "${MODEL:-}")" "$(json_escape "$ACCESS")" \
+  "$(json_escape "$BACKEND")" "$(json_escape "$PROFILE")" "$(json_escape "${MODEL:-}")" "$(json_escape "${EFFORT:-}")" "$(json_escape "$ACCESS")" \
   "$(json_escape "$PROJECT_ROOT")" "$(json_escape "$EXEC_ROOT")" "$(json_escape "$report_file")" \
   "$(json_escape "$stdout_log")" "$(json_escape "$stderr_log")" "$(json_escape "$WORKTREE_DIR")" \
   "$(json_escape "$BRANCH")" > "$status_file"

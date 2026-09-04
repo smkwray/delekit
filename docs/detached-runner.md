@@ -1,7 +1,7 @@
 # herd — detached delegate workers
 
 **`herd`** spawns and herds detached headless workers: fire-and-forget agents on
-Codex, Pi, Claude, Muse, Opencode, or Grok Build that keep running after the command returns, and that you can
+Codex, Pi, Claude, Muse, Opencode, Grok Build, or Cursor Agent that keep running after the command returns, and that you can
 check on, steer, and resume later — with no gateway and no Claude session.
 
 ## What it is
@@ -14,11 +14,11 @@ The missing delegation quadrant. Today delekit covers three:
 | resumable/steerable/detached | `tandy` (native)             | **`herd`** ← this      |
 
 `herd` gives you **detached, resumable, steerable** headless workers on Codex,
-Pi, Claude, Muse, or Opencode, with **no gateway** and **no Claude session** — drivable from a
+Pi, Claude, Muse, Opencode, Grok Build, or Cursor Agent, with **no gateway** and **no Claude session** — drivable from a
 bare terminal, a script, CI, or a non-Claude orchestrator. It is the gateway-free
 sibling of `tandy`, and the steerable sibling of `dairy`.
 
-Backends: **codex, pi, claude, muse, opencode, and grok.** Gemini and Antigravity
+Backends: **codex, pi, claude, muse, opencode, grok, and cursor.** Gemini and Antigravity
 (`agy`) remain excluded from the detached path because their headless CLIs do
 not provide the session/event contract this supervisor needs.
 
@@ -34,6 +34,25 @@ unenforced. Grok's read-only mode independently exposes only
 `read_file,grep,list_dir`, denies MCP tools, disables subagents and web search,
 and therefore cannot run tests or shell commands; its OS sandbox is defense in
 depth rather than the sole boundary.
+
+Cursor Agent (`cursor-agent`, never PATH `agent`) streams Claude-shaped JSON:
+every event carries `session_id`. A successful `result.subtype=success` authorizes
+the turn; the publishable answer is the last matching-session `assistant`
+message, not the terminal `result` string (which can concatenate earlier
+assistant text). `--resume <id>` continues the chat. Intermediate assistant
+text does not itself authorize `done`. A mismatched session is cancelled
+immediately rather than left running until natural exit. Anything else fails as
+`cursor-protocol` and does not publish intermediate assistant text or a
+successful answer; `report.md` holds a failure diagnostic, and the previous
+successful answer, when present, is retained as `previous-report.md`. The prompt
+is stdin. Read-only is
+`--force --mode plan` (write tools and shell redirects denied; a read-only
+shell still works). `workspace-write` is refused: `--force --sandbox enabled`
+wrote outside `--workspace`. Full is `--force --sandbox disabled`. Profiles
+`grok`, `grok-fast`, and `auto` resolve from `config/models.env`. Cursor Agent is
+live-qualified on macOS. The Windows PowerShell implementation is source-complete
+but remains unqualified until native dairy and herd read-only/full receipts are
+captured.
 
 `muse exec --json` qualifies on both counts: every record carries
 `stream.id` (the session id) and the turn's answer arrives as one
@@ -228,22 +247,30 @@ herd spawn <workspace|readonly|full> [core opts] (prompt | --prompt-file | stdin
 herd list [--all] [--any-owner] [--json]      reap-then-list this device's tasks
 herd status <task> [--json]                   cheap state probe
 herd peek   <task> [--tail N] [--thinking]    recent events / raw stream (costly)
-herd result <task> [--wait] [--timeout S]     final report
+herd result <task> [--wait] [--timeout S] [--json]
+                                                final report/state
 herd send   <task> [--now] (prompt | -f FILE) steer / answer; resumes via session_id
 herd kill   <task>                            SIGINT then SIGKILL
 herd prune  [--apply] [--idle-min N] [--any-owner]   GC terminal+idle dirs (dry-run default)
 herd doctor                                   env / dirs / backend checks
 ```
 
-Core opts mirror `dairy`: `--backend codex|pi|claude|muse|opencode|grok`, `--profile`
+Core opts mirror `dairy`: `--backend codex|pi|claude|muse|opencode|grok|cursor`, `--profile`
 (backend-specific, resolved from `config/models.env`: codex and pi take
 `terra|luna|sol` with `terra` default, muse takes `spark`, opencode takes
-`ox|nemotron|hy3` with `ox` default, and grok uses the CLI model default), `--model`,
+`ox|nemotron|hy3` with `ox` default, grok uses Grok's CLI default unless
+`--model` is supplied, and cursor uses
+`DELEGATE_CURSOR_PROFILES`), `--model`,
 `--effort`, `--access`/`--sandbox`, `--worktree` + `--dirty-policy` +
 `--no-auto-commit`, `--no-preamble`, `--json`. Access→sandbox/permission mapping
 and the access preamble are lifted verbatim from `dairy` so the two runners stay
 consistent — including muse's read-only caveat (it loses the shell; see
 [dairy-runner.md](dairy-runner.md)).
+
+Watchers should use `herd result <task> --wait --timeout S --json` and branch on
+`status.state` (and `stall_reason` when present). A zero exit status means that
+the result query ran; it does not mean the worker succeeded. Re-arm the watcher
+if the state is still `working` at timeout.
 
 `--worktree` creates `<project>/.worktrees/<name>` and requires `.worktrees/` in
 the project's root `.gitignore`. It is ignored in read-only mode, where isolation
@@ -258,7 +285,7 @@ so it keeps driving the window it opened instead of starting blind.
 
 ## Backend adapters
 
-All six stream JSON so we can capture the session id and observe activity live.
+All seven stream JSON so we can capture the session id and observe activity live.
 Unlike `dairy`'s backend-specific one-shot paths, every `herd` adapter must
 persist and recover a resumable session handle.
 
@@ -382,7 +409,7 @@ tools/worktree_manager.py             the single creator of project-local worktr
 bin/herd.sh  bin/herd.ps1             thin shims on PATH (wired by the installers)
 tests/test_delegate_supervisor.py     reaper / prune / list / kill against fixtures
 tests/test_delegate_backends.py       spawn/result/send/stall via a fake backend
-tests/fake_backend.py                 a controllable codex/pi/claude/muse/opencode/grok stand-in, no network
+tests/fake_backend.py                 a controllable codex/pi/claude/muse/opencode/grok/cursor stand-in, no network
 docs/detached-runner.md               this doc
 ```
 

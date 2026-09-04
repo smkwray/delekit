@@ -13,6 +13,24 @@ for a speed or mode:
 
 Actual provider model IDs live only in the corresponding `DELEGATE_MODEL_*` lines. Generated files may repeat them as outputs, but no source template or launcher pins them.
 
+The `$orca` skill also exposes two short bare selectors for headless work.
+If the current harness already exposes the requested model as a native subagent,
+that native path wins; the table is the **headless fallback** when it does not.
+
+| Selector | Headless fallback resolution | Config source |
+|---|---|---|
+| `sol` | Codex `--profile sol` | `DELEGATE_MODEL_SOL` + `DELEGATE_EFFORT_SOL` |
+| `grok` | Grok `--backend grok` | Grok CLI default unless `--model` |
+| `cursor` / `cursor grok` | Cursor `--backend cursor --profile grok` | `DELEGATE_CURSOR_MODEL_GROK` |
+| `cursor grok fast` | Cursor `--backend cursor --profile grok-fast` | `DELEGATE_CURSOR_MODEL_GROK_FAST` |
+| `cursor auto` | Cursor `--backend cursor --profile auto` | `DELEGATE_CURSOR_MODEL_AUTO` (`auto`) |
+
+Grok is a backend, not a profile roster: delekit does not pin a Grok model.
+Pass `--model`/`--effort` to override the CLI default. Cursor Agent is a
+separate backend: its profile list lives in `DELEGATE_CURSOR_PROFILES`. Do not
+confuse `--backend grok` (Grok Build) with `--backend cursor --profile grok`
+(Cursor's first-party Grok).
+
 ## Change a model
 
 1. Edit one `DELEGATE_MODEL_*` line in `config/models.env`.

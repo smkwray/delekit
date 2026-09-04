@@ -26,7 +26,7 @@ read-only `pi`, `opencode`, and `grok`, and, when applicable, one worktree line.
 
 ## Profiles and central model mapping
 
-Profiles are backend-specific and resolve through `config/models.env`. Codex and Pi share `terra` (default), `luna`, and `sol`; Pi pins the ChatGPT-subscription `openai-codex` provider rather than an API-key provider. Muse uses `spark` (default) = `muse-spark-1.2-contributor`, and like Codex takes a separate effort, so `--effort`/`-Effort` applies. Antigravity (`agy`) uses `flash-high` (default), `flash-low`, and `pro-high`; its slug carries the effort tier, so no separate `--effort` is sent. Opencode profiles come from `DELEGATE_OPENCODE_PROFILES` in `config/models.env` — that list *is* the profile set and its first entry is the default, so adding or renaming one needs no code change on either platform. An empty list is valid and makes opencode behave like `claude`, where `--model` is required. Grok Build uses Grok's CLI model default unless `--model`/`-Model` is supplied; no stale profile mapping is pinned in delekit. The shipped opencode defaults sit on OpenCode Zen's free tier so a key with no credits still works; paid and OAuth models are reachable through an explicit `--model`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window. `--model`/`-Model` and supported effort overrides apply to one run. Claude model choices remain explicit because its provider default is better handled by its own CLI.
+Profiles are backend-specific and resolve through `config/models.env`. Codex and Pi share `terra` (default), `luna`, and `sol`; Pi pins the ChatGPT-subscription `openai-codex` provider rather than an API-key provider. Muse uses `spark` (default) = `muse-spark-1.2-contributor`, and like Codex takes a separate effort, so `--effort`/`-Effort` applies. Antigravity (`agy`) uses `flash-high` (default), `flash-low`, and `pro-high`; its slug carries the effort tier, so no separate `--effort` is sent. Opencode profiles come from `DELEGATE_OPENCODE_PROFILES` in `config/models.env` — that list *is* the profile set and its first entry is the default, so adding or renaming one needs no code change on either platform. An empty list is valid and makes opencode behave like `claude`, where `--model` is required. Grok Build uses Grok's CLI model default unless `--model`/`-Model` is supplied; no stale profile mapping is pinned in delekit. Cursor Agent (`--backend cursor`) is a different backend from Grok Build: it invokes `cursor-agent` (never PATH `agent`) and its profiles come from `DELEGATE_CURSOR_PROFILES` — shipped as `grok`, `grok-fast`, and `auto`. Effort and Fast are part of the catalog id, so `--effort` and Codex `--fast` are refused. The shipped opencode defaults sit on OpenCode Zen's free tier so a key with no credits still works; paid and OAuth models are reachable through an explicit `--model`. The old agy uses of `terra`, `luna`, and `sol` remain deprecated aliases for one migration window. Claude model choices remain explicit because its provider default is better handled by its own CLI.
 
 **Muse tokens are discounted in exchange for training rights.** The
 `-contributor` model is priced down because the provider may use session content
@@ -155,6 +155,27 @@ release with the usage records it uses as response boundaries. Authenticate the
 installed `grok` CLI separately with `grok login` before running a live task;
 installation and wiring do not perform that login.
 
+`cursor` uses Cursor Agent (`cursor-agent`). It is not Grok Build and must not
+be invoked as PATH `agent`. Measured against cursor-agent 2026.09.02-c22c1a3
+on macOS. Cursor Agent is live-qualified on macOS. The Windows PowerShell
+implementation is source-complete but remains unqualified until native dairy and
+herd read-only/full receipts are captured.
+
+| dairy access | cursor-agent flags | what it actually enforces |
+| --- | --- | --- |
+| `read-only` | `-p --trust --force --mode plan --sandbox enabled --workspace <root>` | Plan mode denies write tools and shell redirects; a read-only shell still works. `--force` is required: without it, plan mode hangs on a shell permission prompt. `--print` without `--force` still wrote a file. |
+| `workspace-write` | — | **Refused.** `--force --sandbox enabled` wrote a file outside `--workspace`. |
+| `full` | `-p --trust --force --sandbox disabled --workspace <root>` | Unrestricted and not workspace-confined. |
+
+Dairy uses `--output-format text` (stdin prompt). Herd uses `stream-json` and
+`--resume <session_id>` from the stream's `session_id`. A herd turn is not
+`done` until a terminal `result.subtype=success` with a nonempty `result` and
+matching `session_id`; truncated or error streams fail as `cursor-protocol`.
+Authenticate with
+`cursor-agent login` (or `CURSOR_API_KEY`) separately; wiring does not log in.
+`auto` is a valid catalog id: the server picks a model per request, so runs
+are not reproducible. There is no `auto-fast`.
+
 **A top-level policy is not enough on its own.** opencode merges
 `OPENCODE_PERMISSION` into an agent and then appends that agent's own
 `agent.<name>.permission`, and the **last matching rule wins**. So an ordinary
@@ -196,8 +217,8 @@ CLI's default model while the status JSON reports `"profile":"sol"`.
 (`DELEGATE_AGY_MODEL_*`), and opencode IDs (`DELEGATE_OPENCODE_MODEL_*`); Claude
 has no such mapping.
 
-**Fix.** Both runners resolve profiles for `codex`, `pi`, `muse`, `agy`, and
-`opencode`, and both **fail** rather than guess for `--backend claude` — pass
+**Fix.** Both runners resolve profiles for `codex`, `pi`, `muse`, `agy`,
+`opencode`, and `cursor`, and both **fail** rather than guess for `--backend claude` — pass
 `--model` explicitly there.
 
 ---

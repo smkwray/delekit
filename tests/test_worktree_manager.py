@@ -25,6 +25,12 @@ class WorktreeManagerTest(unittest.TestCase):
             ["git", "-C", str(self.repo), "config", "user.email", "test@example.invalid"],
             check=True,
         )
+        # These temporary repositories use a synthetic identity and must not
+        # inherit the owner's global publication-identity hook.
+        subprocess.run(
+            ["git", "-C", str(self.repo), "config", "core.hooksPath", "/dev/null"],
+            check=True,
+        )
         (self.repo / ".gitignore").write_text(".worktrees/\n", encoding="utf-8")
         subprocess.run(
             ["git", "-C", str(self.repo), "add", ".gitignore"],

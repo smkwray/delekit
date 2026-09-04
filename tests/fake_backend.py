@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""A fake codex/pi/claude/muse/opencode/grok CLI for herd tests. No network.
+"""A fake codex/pi/claude/muse/opencode/grok/cursor CLI for herd tests. No network.
 
 Detects which backend it is impersonating from argv (codex uses `exec` with a
-`-` stdin prompt, pi uses `--mode json`, claude uses `-p`, muse uses
-`--prompt-file`, grok uses `--output-format streaming-json`, opencode
+`-` stdin prompt, pi uses `--mode json`, claude uses `-p`, cursor uses `--trust`,
+muse uses `--prompt-file`, grok uses `--output-format streaming-json`, opencode
 uses `run --format json`) and emits that backend's streaming-JSON event schema,
 then exits.
 
@@ -26,6 +26,14 @@ Env knobs:
   FAKE_GROK_EMPTY_FINAL=1  finish Grok with a contentless final response.
   FAKE_GROK_STOP_REASON  override Grok's terminal stop reason.
   FAKE_GROK_OMIT_FINAL_USAGE=1  omit Grok's final usage response boundary.
+  FAKE_CURSOR_RESULT_ERROR=1  emit Cursor assistant text then result.subtype=error.
+  FAKE_CURSOR_OMIT_RESULT=1  emit Cursor assistant text then EOF with no result.
+  FAKE_CURSOR_EMPTY_RESULT=1  emit a Cursor success result with an empty answer.
+  FAKE_CURSOR_SESSION_MISMATCH=1  emit a different session_id than --resume.
+  FAKE_CURSOR_MISMATCH_SIDE_EFFECT=1  after a mismatched init, wait then write
+                FAKE_WRITE_FILE (exercises abort-before-side-effect).
+  FAKE_CURSOR_MULTI_ASSISTANT=1  emit a pre-tool assistant, a final assistant,
+                then a concatenated successful result.
   FAKE_ORPHAN_HOLDS_PIPE=1  answer normally, detach a setsid grandchild that
                 INHERITS stdout, then exit 0 -- the shape opencode's shell tool
                 produces, which leaves the reader blocked on a pipe nobody will
@@ -78,7 +86,10 @@ def main():
                           "variants": {v: {} for v in variants}}, indent=2))
         return 0
     is_pi = "--mode" in argv and argv[argv.index("--mode") + 1] == "json"
-    is_claude = "-p" in argv
+    # `--trust` is Cursor-only. Claude also uses `-p` and the same stream-json
+    # shape, so Cursor must be distinguished before the Claude test.
+    is_cursor = "--trust" in argv
+    is_claude = "-p" in argv and not is_cursor
     is_grok = ("--output-format" in argv and
                argv[argv.index("--output-format") + 1] == "streaming-json")
     is_muse = "--prompt-file" in argv and not is_grok
@@ -92,8 +103,12 @@ def main():
         sid = argv[argv.index("--session-id") + 1]
     elif is_grok and "--resume" in argv:
         sid = argv[argv.index("--resume") + 1]
+    elif (is_cursor or is_claude) and "--resume" in argv:
+        sid = argv[argv.index("--resume") + 1]
     else:
         sid = "sess-fake-0001"
+    if is_cursor and os.environ.get("FAKE_CURSOR_SESSION_MISMATCH") == "1":
+        sid = "sess-mismatch-0002"
 
     if is_muse or is_grok:
         # Muse and Grok read the prompt from a file and never from stdin.
@@ -105,7 +120,7 @@ def main():
 
     if is_pi:
         emit({"type": "session", "version": 3, "id": sid})
-    elif is_claude:
+    elif is_claude or is_cursor:
         emit({"type": "system", "subtype": "init", "session_id": sid})
     elif is_muse:
         emit(muse_envelope("run.lifecycle.started", {"kind": "run_started"}, sid))
@@ -148,7 +163,9 @@ def main():
         subprocess.Popen([sys.executable, "-c", code], **kwargs)
 
     written = os.environ.get("FAKE_WRITE_FILE")
-    if written:
+    side_effect_after_init = (
+        is_cursor and os.environ.get("FAKE_CURSOR_MISMATCH_SIDE_EFFECT") == "1")
+    if written and not side_effect_after_init:
         with open(written, "w", encoding="utf-8") as fh:
             fh.write("worker output\n")
 
@@ -174,6 +191,26 @@ def main():
         emit({"type": "assistant", "session_id": sid,
               "message": {"content": [{"type": "text", "text": body}]}})
         emit({"type": "result", "subtype": "success", "session_id": sid, "result": body})
+    elif is_cursor:
+        if os.environ.get("FAKE_CURSOR_MISMATCH_SIDE_EFFECT") == "1":
+            time.sleep(0.5)
+            if written:
+                with open(written, "w", encoding="utf-8") as fh:
+                    fh.write("mismatch side effect\n")
+        pretool = os.environ.get("FAKE_CURSOR_MULTI_ASSISTANT") == "1"
+        if pretool:
+            emit({"type": "assistant", "session_id": sid,
+                  "message": {"content": [{"type": "text", "text": "I'll create the file now."}]}})
+        emit({"type": "assistant", "session_id": sid,
+              "message": {"content": [{"type": "text", "text": body}]}})
+        if os.environ.get("FAKE_CURSOR_OMIT_RESULT") == "1":
+            return 0
+        subtype = "error" if os.environ.get("FAKE_CURSOR_RESULT_ERROR") == "1" else "success"
+        result_text = "" if os.environ.get("FAKE_CURSOR_EMPTY_RESULT") == "1" else body
+        if pretool and subtype == "success" and result_text:
+            result_text = "I'll create the file now." + body
+        emit({"type": "result", "subtype": subtype,
+              "is_error": subtype == "error", "session_id": sid, "result": result_text})
     elif is_opencode:
         # Each text part arrives as one complete event, so the last one is the
         # whole final answer -- never a fragment to be reassembled.

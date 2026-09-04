@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Step-2+ tests: backend adapters, the detached turn helper, spawn/result/send.
 
-No network. A fake codex/pi/claude/muse/opencode/grok CLI (tests/fake_backend.py) is pointed at via
+No network. A fake codex/pi/claude/muse/opencode/grok/cursor CLI (tests/fake_backend.py) is pointed at via
 the backend executable overrides, so
 spawn runs the real detached helper against a controllable JSON event stream.
 """
@@ -38,26 +38,37 @@ class Base(unittest.TestCase):
         self.proj = tempfile.TemporaryDirectory()
         os.environ["DELEGATE_STATE_DIR"] = self.tmp.name
         os.environ["DELEKIT_DEVICE_ID"] = "test-device"
-        # Wrap the fake so it is invoked as its own executable (shebang-based).
+        # Invoke the fake as its own executable. POSIX can execute the
+        # shebang-based Python file directly; Windows needs a command shim
+        # because CreateProcess cannot launch a .py file as an application.
         st = os.stat(FAKE)
         os.chmod(FAKE, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        os.environ["DELEGATE_CODEX_BIN"] = str(FAKE)
-        os.environ["DELEGATE_PI_BIN"] = str(FAKE)
-        os.environ["DELEGATE_CLAUDE_BIN"] = str(FAKE)
-        os.environ["DELEGATE_MUSE_BIN"] = str(FAKE)
-        os.environ["DELEGATE_OPENCODE_BIN"] = str(FAKE)
-        os.environ["DELEGATE_GROK_BIN"] = str(FAKE)
+        if os.name == "nt":
+            self.fake_bin = Path(self.tmp.name) / "fake_backend.cmd"
+            self.fake_bin.write_text(
+                f'@echo off\n"{sys.executable}" "{FAKE}" %*\n',
+                encoding="ascii",
+            )
+        else:
+            self.fake_bin = FAKE
+        for key in ("DELEGATE_CODEX_BIN", "DELEGATE_PI_BIN", "DELEGATE_CLAUDE_BIN",
+                    "DELEGATE_MUSE_BIN", "DELEGATE_OPENCODE_BIN", "DELEGATE_GROK_BIN",
+                    "DELEGATE_CURSOR_BIN"):
+            os.environ[key] = str(self.fake_bin)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
         self.proj.cleanup()
         for k in ("DELEGATE_STATE_DIR", "DELEKIT_DEVICE_ID", "DELEGATE_CODEX_BIN",
                   "DELEGATE_PI_BIN", "DELEGATE_CLAUDE_BIN", "DELEGATE_MUSE_BIN",
-                  "DELEGATE_OPENCODE_BIN", "DELEGATE_GROK_BIN",
+                  "DELEGATE_OPENCODE_BIN", "DELEGATE_GROK_BIN", "DELEGATE_CURSOR_BIN",
                   "FAKE_HANG", "FAKE_DELAY_S", "FAKE_GROK_SESSION_MISMATCH",
                   "FAKE_GROK_MISSING_SESSION", "FAKE_GROK_EMPTY_FINAL",
                   "FAKE_GROK_STOP_REASON", "FAKE_GROK_OMIT_FINAL_USAGE",
-                  "FAKE_GROK_VERSION"):
+                  "FAKE_GROK_VERSION", "FAKE_CURSOR_RESULT_ERROR",
+                  "FAKE_CURSOR_OMIT_RESULT", "FAKE_CURSOR_EMPTY_RESULT",
+                  "FAKE_CURSOR_SESSION_MISMATCH", "FAKE_CURSOR_MISMATCH_SIDE_EFFECT",
+                  "FAKE_CURSOR_MULTI_ASSISTANT", "FAKE_WRITE_FILE"):
             os.environ.pop(k, None)
 
     def wait_done(self, task, timeout=20.0):
@@ -65,7 +76,20 @@ class Base(unittest.TestCase):
         deadline = time.time() + timeout
         while time.time() < deadline:
             if marker.exists():
-                return True
+                # The marker is written before the detached helper process
+                # returns. POSIX permits removing an open file, but Windows
+                # does not, so cleanup must wait for the recorded process tree
+                # to be fully gone as well. The test invokes launch_helper in
+                # this process, which retains its Popen object; poll that exact
+                # object so a completed helper is reaped instead of remaining
+                # visible as a POSIX zombie.
+                meta = ds.read_json(ds.task_dir(task) / "meta.json") or {}
+                helper = ds.helper_pid(ds.task_dir(task), meta)
+                for proc in ds._LAUNCHED:
+                    if proc.pid == helper:
+                        proc.poll()
+                if not ds.task_process_alive(ds.task_dir(task), meta):
+                    return True
             time.sleep(0.1)
         return False
 
@@ -171,6 +195,7 @@ class TestParsers(unittest.TestCase):
         self.assertIn("--prompt-file", argv)
         self.assertNotIn("the task", argv)
         self.assertIn("--reasoning-effort", argv)
+        self.assertNotIn("--effort", argv)
         self.assertIn("--output-format", argv)
         self.assertIn("streaming-json", argv)
         self.assertIn("--no-auto-update", argv)
@@ -182,6 +207,59 @@ class TestParsers(unittest.TestCase):
                                 "session_id": "123e4567-e89b-12d3-a456-426614174000"})[0]
         self.assertIn("--resume", resumed)
         self.assertNotIn("--session-id", resumed)
+
+    def test_cursor_parser_session_and_result(self):
+        b = ds.BACKENDS["cursor"]
+        self.assertEqual(b.parse({"type": "system", "subtype": "init",
+                                  "session_id": "c-s1"}).get("session_id"), "c-s1")
+        success = b.parse({"type": "result", "subtype": "success",
+                           "is_error": False, "result": "final",
+                           "session_id": "c-s1"})
+        self.assertIsNone(success.get("message"))
+        self.assertEqual(success.get("terminal"), "1")
+        self.assertEqual(success.get("terminal_session_id"), "c-s1")
+        asst = {"type": "assistant", "session_id": "c-s1",
+                "message": {"content": [{"type": "text", "text": "mid"}]}}
+        self.assertEqual(b.parse(asst).get("assistant"), "mid")
+        self.assertIsNone(b.parse(asst).get("message"))
+        self.assertEqual(b.parse({"type": "thinking", "subtype": "delta",
+                                  "text": "why"}).get("thinking"), "why")
+        err = b.parse({"type": "result", "subtype": "error",
+                       "is_error": True, "result": "boom", "session_id": "c-s1"})
+        self.assertIsNone(err.get("message"))
+        self.assertEqual(err.get("terminal"), "1")
+        self.assertTrue(err.get("error"))
+
+    def test_cursor_access_mapping_and_resume(self):
+        b = ds.BACKENDS["cursor"]
+        self.assertEqual(b.sandbox_args("read-only"),
+                         ["--force", "--mode", "plan", "--sandbox", "enabled"])
+        with self.assertRaises(ds.HerdError):
+            b.sandbox_args("workspace-write")
+        self.assertEqual(b.sandbox_args("danger-full-access"),
+                         ["--force", "--sandbox", "disabled"])
+        argv, stdin_text, cwd = b.spawn_cmd({"task": "c", "exec_root": "/tmp/x",
+                                               "model": "cursor-grok-4.6-high-fast",
+                                               "access": "read-only",
+                                               "backend_bin": "/fake/cursor-agent",
+                                               "prompt": "the task"})
+        self.assertEqual(stdin_text, "the task")
+        self.assertEqual(cwd, "/tmp/x")
+        self.assertIn("-p", argv)
+        self.assertIn("stream-json", argv)
+        self.assertIn("--trust", argv)
+        self.assertIn("--workspace", argv)
+        self.assertIn("--force", argv)
+        self.assertIn("plan", argv)
+        self.assertNotIn("--effort", argv)
+        self.assertNotIn("the task", argv)
+        resumed = b.resume_cmd({"task": "c", "exec_root": "/tmp/x",
+                                "model": "cursor-grok-4.6-high-fast",
+                                "access": "read-only",
+                                "backend_bin": "/fake/cursor-agent",
+                                "session_id": "chat-1",
+                                "prompt": "again"})[0]
+        self.assertEqual(resumed[resumed.index("--resume") + 1], "chat-1")
 
 
 class TestOpencodeAdapter(Base):
@@ -334,6 +412,42 @@ class TestOpencodeAdapter(Base):
         self.assertEqual(ds.resolve_model_effort("opencode", "terra", False, "vendor/pinned", None),
                          ("vendor/pinned", None))
 
+    def test_grok_has_no_profile_roster(self):
+        self.assertEqual(ds.resolve_model_effort("grok", "terra", False, None, None),
+                         (None, None))
+        self.assertEqual(ds.resolve_model_effort("grok", "terra", False, "grok-next", "low"),
+                         ("grok-next", "low"))
+        with self.assertRaises(ds.HerdError):
+            ds.resolve_model_effort("grok", "terra", True, None, None)
+
+    def test_cursor_profiles_are_data_driven(self):
+        self._models_env(
+            "DELEGATE_CURSOR_PROFILES=grok, grok-fast, auto\n"
+            "DELEGATE_CURSOR_MODEL_GROK=cursor-grok-4.6-high\n"
+            "DELEGATE_CURSOR_MODEL_GROK_FAST=cursor-grok-4.6-high-fast\n"
+            "DELEGATE_CURSOR_MODEL_AUTO=auto\n")
+        self.assertEqual(ds.cursor_profiles(), ["grok", "grok-fast", "auto"])
+        self.assertEqual(ds.resolve_model_effort("cursor", "terra", False, None, None),
+                         ("cursor-grok-4.6-high", None))
+        self.assertEqual(ds.resolve_model_effort("cursor", "grok-fast", True, None, None),
+                         ("cursor-grok-4.6-high-fast", None))
+        self.assertEqual(ds.resolve_model_effort("cursor", "auto", True, None, None),
+                         ("auto", None))
+        self.assertEqual(ds.resolve_model_effort("cursor", "grok", True, "composer-2.5-fast", None),
+                         ("composer-2.5-fast", None))
+        with self.assertRaises(ds.HerdError):
+            ds.resolve_model_effort("cursor", "composer", True, None, None)
+        with self.assertRaises(ds.HerdError):
+            ds.resolve_model_effort("cursor", "grok", True, None, "high")
+
+    def test_cursor_empty_profile_list_requires_an_explicit_model(self):
+        self._models_env("DELEGATE_CURSOR_PROFILES=\n")
+        self.assertEqual(ds.cursor_profiles(), [])
+        with self.assertRaises(ds.HerdError):
+            ds.resolve_model_effort("cursor", "terra", False, None, None)
+        self.assertEqual(ds.resolve_model_effort("cursor", "terra", False, "auto", None),
+                         ("auto", None))
+
     def test_resume_uses_session_flag(self):
         b = ds.BACKENDS["opencode"]
         argv = b.resume_cmd({"exec_root": "/tmp/x", "model": "m", "access": "read-only",
@@ -421,6 +535,63 @@ class TestSpawnResult(Base):
         rc = self.spawn(name="gk-ws", backend="grok", mode="workspace")
         self.assertEqual(rc, 2)
         self.assertFalse(ds.task_dir("gk-ws").exists())
+
+    def test_cursor_spawn_runs_and_reports(self):
+        self.spawn(name="cur", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("cur"))
+        payload = ds.reconcile(ds.task_dir("cur"))
+        self.assertEqual(payload["state"], "done")
+        self.assertIsNone(payload.get("stall_reason"))
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertEqual((ds.task_dir("cur") / "report.md").read_text(), "did: do the thing")
+
+    def test_cursor_report_is_final_assistant_not_result_aggregate(self):
+        os.environ["FAKE_CURSOR_MULTI_ASSISTANT"] = "1"
+        self.spawn(name="cur-multi", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("cur-multi"))
+        payload = ds.reconcile(ds.task_dir("cur-multi"))
+        self.assertEqual(payload["state"], "done")
+        report = (ds.task_dir("cur-multi") / "report.md").read_text()
+        self.assertEqual(report, "did: do the thing")
+        self.assertNotIn("I'll create the file now.", report)
+        events = (ds.task_dir("cur-multi") / "events.jsonl").read_text()
+        self.assertIn("I'll create the file now.", events)
+
+    def test_cursor_error_result_is_not_done(self):
+        os.environ["FAKE_CURSOR_RESULT_ERROR"] = "1"
+        self.spawn(name="cur-err", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("cur-err"))
+        payload = ds.reconcile(ds.task_dir("cur-err"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "cursor-protocol")
+        report = (ds.task_dir("cur-err") / "report.md").read_text()
+        self.assertNotIn("did: do the thing", report)
+        self.assertIn("non-success result", report)
+
+    def test_cursor_truncated_stream_is_not_done(self):
+        os.environ["FAKE_CURSOR_OMIT_RESULT"] = "1"
+        self.spawn(name="cur-trunc", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("cur-trunc"))
+        payload = ds.reconcile(ds.task_dir("cur-trunc"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "cursor-protocol")
+        report = (ds.task_dir("cur-trunc") / "report.md").read_text()
+        self.assertNotIn("did: do the thing", report)
+        self.assertIn("without a successful result", report)
+
+    def test_cursor_empty_result_is_not_done(self):
+        os.environ["FAKE_CURSOR_EMPTY_RESULT"] = "1"
+        self.spawn(name="cur-empty", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("cur-empty"))
+        payload = ds.reconcile(ds.task_dir("cur-empty"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "cursor-protocol")
+        self.assertIn("usable answer", (ds.task_dir("cur-empty") / "report.md").read_text())
+
+    def test_cursor_workspace_is_refused_before_state(self):
+        rc = self.spawn(name="cur-ws", backend="cursor", mode="workspace")
+        self.assertEqual(rc, 2)
+        self.assertFalse(ds.task_dir("cur-ws").exists())
 
     def test_grok_terminal_session_is_required(self):
         os.environ["FAKE_GROK_MISSING_SESSION"] = "1"
@@ -777,7 +948,9 @@ class TestSpawnResult(Base):
     def _git_project(self):
         root = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
-        for cmd in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        for cmd in (["init", "-q"], ["config", "user.email", "t@t"],
+                    ["config", "user.name", "t"],
+                    ["config", "core.hooksPath", "/dev/null"]):
             subprocess.run(["git", "-C", root, *cmd], check=True, capture_output=True)
         Path(root, ".gitignore").write_text(".worktrees/\n")
         Path(root, "seed.txt").write_text("seed\n")
@@ -918,6 +1091,58 @@ class TestSendResume(Base):
         self.assertEqual(payload["state"], "done")
         self.assertEqual(payload["session_id"], first_session)
         self.assertIn("resumed:", (ds.task_dir("gkr") / "report.md").read_text())
+
+    def test_cursor_send_resumes_via_session_id(self):
+        self.spawn(prompt="first turn", name="curr", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("curr"))
+        self.assertEqual(quiet_main(["send", "curr", "second turn", "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("curr"))
+        payload = ds.reconcile(ds.task_dir("curr"))
+        self.assertEqual(payload["state"], "done")
+        self.assertIsNone(payload.get("stall_reason"))
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertEqual((ds.task_dir("curr") / "report.md").read_text(), "resumed: second turn")
+
+    def test_cursor_send_session_mismatch_fails_closed(self):
+        self.spawn(prompt="first turn", name="curr-mm", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("curr-mm"))
+        first = ds.reconcile(ds.task_dir("curr-mm"))
+        self.assertEqual(first["session_id"], "sess-fake-0001")
+        os.environ["FAKE_CURSOR_SESSION_MISMATCH"] = "1"
+        self.assertEqual(quiet_main(["send", "curr-mm", "second turn", "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("curr-mm"))
+        payload = ds.reconcile(ds.task_dir("curr-mm"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "cursor-protocol")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        report = (ds.task_dir("curr-mm") / "report.md").read_text()
+        self.assertNotIn("resumed:", report)
+        self.assertIn("sess-mismatch-0002", report)
+
+    def test_cursor_send_session_mismatch_stops_before_side_effect(self):
+        self.spawn(prompt="first turn", name="curr-mm-stop", backend="cursor", mode="readonly")
+        self.assertTrue(self.wait_done("curr-mm-stop"))
+        first_report = (ds.task_dir("curr-mm-stop") / "report.md").read_text()
+        sentinel = Path(self.proj.name) / "MISMATCH-SENTINEL.txt"
+        os.environ["FAKE_CURSOR_SESSION_MISMATCH"] = "1"
+        os.environ["FAKE_CURSOR_MISMATCH_SIDE_EFFECT"] = "1"
+        os.environ["FAKE_WRITE_FILE"] = str(sentinel)
+        self.assertEqual(quiet_main(["send", "curr-mm-stop", "second turn",
+                                     "--json", "--no-preamble"]), 0)
+        self.assertTrue(self.wait_done("curr-mm-stop"))
+        payload = ds.reconcile(ds.task_dir("curr-mm-stop"))
+        self.assertEqual(payload["state"], "failed")
+        self.assertEqual(payload["stall_reason"], "cursor-protocol")
+        self.assertEqual(payload["session_id"], "sess-fake-0001")
+        self.assertFalse(ds.task_process_alive(ds.task_dir("curr-mm-stop"),
+                                               ds.read_json(ds.task_dir("curr-mm-stop") / "meta.json") or {}))
+        self.assertFalse(sentinel.exists())
+        report = (ds.task_dir("curr-mm-stop") / "report.md").read_text()
+        self.assertNotIn("resumed:", report)
+        self.assertNotEqual(report, first_report)
+        previous = ds.task_dir("curr-mm-stop") / "previous-report.md"
+        if previous.exists():
+            self.assertEqual(previous.read_text(), first_report)
 
     def test_grok_send_rechecks_streaming_schema_floor(self):
         self.spawn(prompt="first turn", name="gkr-old", backend="grok", mode="readonly")

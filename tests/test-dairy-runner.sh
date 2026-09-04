@@ -8,6 +8,10 @@ mkdir -p "$TMP/repo"
 git -C "$TMP/repo" init -q
 git -C "$TMP/repo" config user.name test
 git -C "$TMP/repo" config user.email test@example.invalid
+# Test repositories must not inherit the owner's global commit-identity hook;
+# this suite deliberately uses a synthetic identity and only tests runner
+# behavior, not the owner's publication guard.
+git -C "$TMP/repo" config core.hooksPath /dev/null
 printf 'base\n' > "$TMP/repo/base.txt"
 printf '.worktrees/\n' > "$TMP/repo/.gitignore"
 git -C "$TMP/repo" add base.txt .gitignore
@@ -405,6 +409,28 @@ assert prompt.rstrip().endswith('grok smoke')
 assert not any('grok smoke' in a for a in args), args
 PY_GROK
 
+# Bare Sol resolves the existing Codex profile, and an explicit effort changes
+# only effort. Dry-run keeps this check independent of a real backend binary.
+PATH="/usr/bin:/bin" "$ROOT/bin/dairy.sh" read --backend codex --profile sol \
+  --project-root "$TMP/repo" --prompt 'sol default' --dry-run --json > "$TMP/sol.json"
+PATH="/usr/bin:/bin" "$ROOT/bin/dairy.sh" read --backend codex --profile sol --effort low \
+  --project-root "$TMP/repo" --prompt 'sol override' --dry-run --json > "$TMP/sol-low.json"
+python3 - "$TMP/sol.json" "$TMP/sol-low.json" "$ROOT/config/models.env" <<'PY_SOL'
+import json, sys
+default = json.load(open(sys.argv[1], encoding='utf-8'))
+override = json.load(open(sys.argv[2], encoding='utf-8'))
+config = {}
+for line in open(sys.argv[3], encoding='utf-8'):
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        key, value = line.split('=', 1)
+        config[key] = value
+expected_model = config['DELEGATE_MODEL_SOL']
+expected_effort = config['DELEGATE_EFFORT_SOL']
+assert (default['model'], default['effort']) == (expected_model, expected_effort), default
+assert (override['model'], override['effort']) == (expected_model, 'low'), override
+PY_SOL
+
 # Grok workspace-write is refused before state or worktree creation because
 # the native workspace sandbox has no Windows enforcement and fails open when
 # application fails. The PowerShell runner must carry the same refusal.
@@ -420,5 +446,87 @@ grep -q 'no cross-platform fail-closed workspace-write' "$TMP/grok-ws.err"
 [[ "$(git -C "$TMP/repo" worktree list --porcelain | grep -c '^worktree ' || true)" -eq 1 ]]
 grep -Fq "if (\$Backend -eq 'grok' -and \$Access -eq 'workspace-write')" "$ROOT/bin/dairy.ps1"
 ! grep -Fq "'workspace-write' { \$arguments += @('--permission-mode', 'bypassPermissions', '--sandbox', 'workspace') }" "$ROOT/bin/dairy.ps1"
+
+# Cursor Agent: dairy uses stdin + print/text, looks up cursor-agent not PATH
+# `agent`, maps read-only to --force --mode plan, and refuses workspace-write
+# because --sandbox enabled still wrote outside --workspace.
+cat > "$TMP/fake-bin/cursor-agent" <<'FAKE_CURSOR'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" > "$CURSOR_ARGS"
+cat > "$CURSOR_PROMPT"
+printf 'fake cursor completed\n'
+FAKE_CURSOR
+chmod +x "$TMP/fake-bin/cursor-agent"
+
+XDG_STATE_HOME="$TMP/cursor-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  CURSOR_ARGS="$TMP/cursor.args" CURSOR_PROMPT="$TMP/cursor.prompt" \
+  "$ROOT/bin/dairy.sh" read --backend cursor --project-root "$TMP/repo" \
+  --prompt 'cursor smoke' --json > "$TMP/cursor.json"
+
+python3 - "$TMP/cursor.json" "$TMP/cursor.args" "$TMP/cursor.prompt" "$ROOT/config/models.env" <<'PY_CURSOR'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+config = {}
+for line in open(sys.argv[4], encoding='utf-8'):
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        key, value = line.split('=', 1)
+        config[key] = value
+assert obj['status'] == 'completed' and obj['backend'] == 'cursor', obj
+assert obj['profile'] == 'grok', obj
+assert obj['model'] == config['DELEGATE_CURSOR_MODEL_GROK'], obj
+assert obj['access'] == 'read-only', obj
+assert obj.get('effort') in ('', None), obj
+assert 'fake cursor completed' in open(obj['report'], encoding='utf-8').read(), obj
+args=open(sys.argv[2], 'rb').read().decode('utf-8').split('\x00')[:-1]
+for expected in ('-p', '--output-format', 'text', '--trust', '--workspace',
+                 '--force', '--mode', 'plan', '--sandbox', 'enabled',
+                 '--model', config['DELEGATE_CURSOR_MODEL_GROK']):
+    assert expected in args, (expected, args)
+assert '--effort' not in args, args
+prompt=open(sys.argv[3], encoding='utf-8').read()
+assert prompt.rstrip().endswith('cursor smoke')
+assert not any('cursor smoke' in a for a in args), args
+PY_CURSOR
+
+PATH="/usr/bin:/bin" "$ROOT/bin/dairy.sh" read --backend cursor --profile grok-fast \
+  --project-root "$TMP/repo" --prompt 'cursor fast' --dry-run --json > "$TMP/cursor-fast.json"
+python3 - "$TMP/cursor-fast.json" "$ROOT/config/models.env" <<'PY_CURSOR_FAST'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+config = {}
+for line in open(sys.argv[2], encoding='utf-8'):
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        key, value = line.split('=', 1)
+        config[key] = value
+assert obj['profile'] == 'grok-fast', obj
+assert obj['model'] == config['DELEGATE_CURSOR_MODEL_GROK_FAST'], obj
+PY_CURSOR_FAST
+
+PATH="/usr/bin:/bin" "$ROOT/bin/dairy.sh" read --backend cursor --profile auto \
+  --project-root "$TMP/repo" --prompt 'cursor auto' --dry-run --json > "$TMP/cursor-auto.json"
+python3 - "$TMP/cursor-auto.json" <<'PY_CURSOR_AUTO'
+import json, sys
+obj=json.load(open(sys.argv[1], encoding='utf-8'))
+assert obj['profile'] == 'auto' and obj['model'] == 'auto', obj
+PY_CURSOR_AUTO
+
+set +e
+XDG_STATE_HOME="$TMP/cursor-ws-state" PATH="$TMP/fake-bin:/usr/bin:/bin" \
+  "$ROOT/bin/dairy.sh" workspace --backend cursor --project-root "$TMP/repo" \
+  --prompt 'nope' --worktree 2> "$TMP/cursor-ws.err"
+cursor_ws_rc=$?
+PATH="/usr/bin:/bin" "$ROOT/bin/dairy.sh" read --backend cursor --effort high \
+  --project-root "$TMP/repo" --prompt 'nope' --dry-run 2> "$TMP/cursor-effort.err"
+cursor_effort_rc=$?
+set -e
+[[ "$cursor_ws_rc" -eq 2 ]]
+grep -q 'no fail-closed workspace-write' "$TMP/cursor-ws.err"
+[[ ! -e "$TMP/cursor-ws-state" ]]
+[[ "$cursor_effort_rc" -eq 2 ]]
+grep -q 'not supported for cursor' "$TMP/cursor-effort.err"
+grep -Fq "if (\$Backend -eq 'cursor' -and \$Access -eq 'workspace-write')" "$ROOT/bin/dairy.ps1"
 
 printf 'dairy runner smoke tests passed\n'

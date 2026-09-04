@@ -4,7 +4,7 @@ param(
     [ValidateSet('workspace', 'write', 'readonly', 'read', 'full')]
     [string]$Delegate,
 
-    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok')]
+    [ValidateSet('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok', 'cursor')]
     [string]$Backend,
 
     [string]$Profile,
@@ -86,7 +86,7 @@ switch ($Delegate) {
 if (-not $Backend) {
     $Backend = if ($env:DELEGATE_BACKEND) { $env:DELEGATE_BACKEND } else { Get-ConfigValue -Key 'RUNNER_DEFAULT_BACKEND' -Default 'codex' }
 }
-if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok')) { throw "Unsupported backend from config/environment: $Backend" }
+if ($Backend -notin @('codex', 'pi', 'claude', 'muse', 'agy', 'opencode', 'grok', 'cursor')) { throw "Unsupported backend from config/environment: $Backend" }
 if ($Access -notin @('read-only', 'workspace-write', 'danger-full-access')) { throw "Unsupported access mode from config/environment: $Access" }
 
 $ProfileExplicit = $PSBoundParameters.ContainsKey('Profile')
@@ -129,8 +129,24 @@ if ($Backend -in @('codex', 'pi')) {
         $listed = if ($opencodeProfiles.Count) { $opencodeProfiles -join ', ' } else { '<none configured>' }
         throw "opencode profile must be one of: $listed. Set DELEGATE_OPENCODE_PROFILES in config/models.env, or pass -Model."
     }
+} elseif ($Backend -eq 'cursor') {
+    # Same data-driven shape as opencode: DELEGATE_CURSOR_PROFILES IS the list
+    # and its first entry is the default. An empty list means -Model is required.
+    $cursorProfiles = @(
+        ([string]$Config['DELEGATE_CURSOR_PROFILES']) -split ',' |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    )
+    if (-not $Profile) {
+        $Profile = if ($cursorProfiles.Count) { $cursorProfiles[0] } else { '' }
+    } elseif ($Profile -notin $cursorProfiles) {
+        $listed = if ($cursorProfiles.Count) { $cursorProfiles -join ', ' } else { '<none configured>' }
+        throw "cursor profile must be one of: $listed. Set DELEGATE_CURSOR_PROFILES in config/models.env, or pass -Model."
+    }
+    if ($Effort) {
+        throw '-Effort is not supported for cursor; effort is part of the catalog id. Use -Profile grok-fast or pass -Model.'
+    }
 } elseif ($ProfileExplicit) {
-    throw "-Profile resolves a model only for the codex, pi, muse, agy, and opencode backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
+    throw "-Profile resolves a model only for the codex, pi, muse, agy, opencode, and cursor backends; config/models.env holds their IDs. For -Backend $Backend, pass -Model explicitly."
 } else {
     $Profile = ''
 }
@@ -154,7 +170,10 @@ if ($Backend -eq 'opencode' -and $Access -eq 'workspace-write') {
 if ($Backend -eq 'grok' -and $Access -eq 'workspace-write') {
     throw 'grok has no cross-platform fail-closed workspace-write mode. Run grok with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes.'
 }
-if ($Backend -in @('opencode', 'grok') -and $Fast) {
+if ($Backend -eq 'cursor' -and $Access -eq 'workspace-write') {
+    throw 'cursor has no fail-closed workspace-write mode: sandbox enabled still wrote outside --workspace. Run cursor with readonly, or full for explicit unrestricted writes; use codex/claude for confined writes.'
+}
+if ($Backend -in @('opencode', 'grok', 'cursor') -and $Fast) {
     throw "-Fast is a Codex backend option and is not supported by $Backend."
 }
 
@@ -263,6 +282,11 @@ except ds.HerdError as exc:
     # agy slug and no separate -Effort is sent. -Model overrides for a single run.
     if (-not $Model) { $Model = $Config["DELEGATE_AGY_MODEL_$profileUpper"] }
     if (-not $Model) { throw "No agy model configured for profile $Profile" }
+} elseif ($Backend -eq 'cursor') {
+    if ($Profile -and -not $Model) { $Model = $Config["DELEGATE_CURSOR_MODEL_$profileUpper"] }
+    if (-not $Model) {
+        throw 'No cursor model: pass -Model, or set DELEGATE_CURSOR_PROFILES and DELEGATE_CURSOR_MODEL_* in config/models.env.'
+    }
 }
 
 function Find-ProjectRoot([string]$Start) {
@@ -389,9 +413,11 @@ if ($BackendBin) {
     # -CommandType Application excludes functions and aliases, so the access
     # boundary cannot change with caller command precedence. npm ships both
     # `opencode` and `opencode.cmd`, so prefer a real Windows executable
-    # extension and take exactly one.
-    $cands = @(Get-Command $Backend -CommandType Application -ErrorAction SilentlyContinue)
-    if (-not $cands.Count) { throw "$Backend CLI not found in PATH (or set $backendBinVar)." }
+    # extension and take exactly one. Cursor's CLI is `cursor-agent`, never
+    # PATH `agent` (Grok Build occupies that name).
+    $lookupName = if ($Backend -eq 'cursor') { 'cursor-agent' } else { $Backend }
+    $cands = @(Get-Command $lookupName -CommandType Application -ErrorAction SilentlyContinue)
+    if (-not $cands.Count) { throw "$lookupName CLI not found in PATH (or set $backendBinVar)." }
     $pick = $cands | Where-Object { $_.Source -match '\.(cmd|bat|exe)$' } | Select-Object -First 1
     if (-not $pick) { $pick = $cands | Select-Object -First 1 }
     $BackendBin = $pick.Source
@@ -561,6 +587,28 @@ try {
             finally { Pop-Location }
             if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
         }
+        'cursor' {
+            # Cursor Agent headless print mode. Prompt on stdin; --trust skips the
+            # workspace prompt; --workspace pins the project. Read-only is
+            # --force --mode plan (measured: write tools and shell redirects
+            # denied, read-only shell still works). Native stderr is captured
+            # and must not become a terminating PowerShell error.
+            $arguments = @('-p', '--output-format', 'text', '--trust', '--workspace', $ExecutionRoot)
+            if ($Model) { $arguments += @('--model', $Model) }
+            switch ($Access) {
+                'read-only' { $arguments += @('--force', '--mode', 'plan', '--sandbox', 'enabled') }
+                'danger-full-access' { $arguments += @('--force', '--sandbox', 'disabled') }
+            }
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            Push-Location $ExecutionRoot
+            try { $ComposedPrompt | & $BackendBin @arguments 1> $StdoutLog 2> $StderrLog; $ExitCode = $LASTEXITCODE }
+            finally {
+                $ErrorActionPreference = $prevEap
+                Pop-Location
+            }
+            if (Test-Path -LiteralPath $StdoutLog) { Copy-Item -LiteralPath $StdoutLog -Destination $ReportFile -Force }
+        }
         'agy' {
             # Antigravity CLI, headless print mode (-p): the prompt is the flag's
             # value and the final answer is plain text on stdout. Access is limited
@@ -642,6 +690,7 @@ $status = [ordered]@{
     backend = $Backend
     profile = $Profile
     model = $Model
+    effort = $Effort
     access = $Access
     project_root = $ProjectRoot
     execution_root = $ExecutionRoot

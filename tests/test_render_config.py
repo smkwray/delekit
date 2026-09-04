@@ -228,6 +228,42 @@ class RenderConfigTest(unittest.TestCase):
         self.assertIn('`run_in_background` mode, not shell `&`', skill)
         self.assertIn('Never leave a working herd turn without one live watcher', skill)
 
+    def test_runner_help_exposes_the_canonical_lifecycle_grammar(self) -> None:
+        herd = subprocess.run(
+            [str(ROOT / 'bin' / 'herd.sh'), '--help'],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertEqual(herd.returncode, 0, herd.stdout + herd.stderr)
+        self.assertIn('herd spawn readonly -f task.md', herd.stdout)
+        spawn = subprocess.run(
+            [str(ROOT / 'bin' / 'herd.sh'), 'spawn', '--help'],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertEqual(spawn.returncode, 0, spawn.stdout + spawn.stderr)
+        self.assertIn('The verb comes before the access mode', spawn.stdout)
+        dairy = subprocess.run(
+            [str(ROOT / 'bin' / 'dairy.sh'), '--help'],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        self.assertEqual(dairy.returncode, 0, dairy.stdout + dairy.stderr)
+
+        # Both helps must state the ONE routing fact that fails hard rather than
+        # degrading: agy has no entry in delegate_supervisor.BACKENDS, so
+        # `herd spawn --backend agy` raises instead of running, and an explicit
+        # --model does not rescue it. A model that reads only one of these helps
+        # must still learn it, so assert it on both sides -- and assert the
+        # preference for herd, so nobody restores a routing rule that sends
+        # steerable work to a blocking runner.
+        self.assertIn('agy', spawn.stdout)
+        self.assertIn('Use dairy for agy', spawn.stdout)
+        self.assertIn('agy has no herd backend', dairy.stdout)
+        self.assertIn('Prefer herd', dairy.stdout)
+
+        # The help text above is only true while this stays true.
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import delegate_supervisor as ds
+        self.assertNotIn('agy', ds.BACKENDS)
+
     def test_launchers_preserve_dynamic_model_selection(self) -> None:
         for name in ('claudex.sh', 'claudex.ps1'):
             text = (ROOT / 'bin' / name).read_text(encoding='utf-8')

@@ -61,21 +61,33 @@ Review and integrate worktrees serially. The orchestrator owns final judgment an
 merging.
 
 Two headless runners exist outside this session, no gateway needed: `dairy`
-(one-shot, blocks until done) and `herd` (detached; spawn returns at once, then
-list/status/result/send/kill — send resumes the same conversation, so use herd
-when work may need steering or a follow-up). Both take a first positional mode:
-workspace (write in the project), readonly, or full. **Computer use — launching
+(one-shot, blocks until done) and `herd` (detached; `spawn` returns at once, then
+list/status/result/send/kill — `send` resumes the same conversation). `dairy`
+takes its access mode first: `dairy <mode> ...`; `herd` takes the verb first:
+`herd spawn <mode> ...`. Use `workspace`, `readonly`, or `full` as the mode.
+Cursor Agent supports readonly and full only; workspace is refused.
+
+Backend decides which runner, lifecycle decides second. `agy` runs on **`dairy`
+only** — it has no herd backend, so `herd spawn --backend agy` fails even with an
+explicit `--model`. `codex`, `pi`, `claude`, `muse`, `opencode`, `grok`, and `cursor` run on
+both; when both work, prefer `herd`, since `herd result <task> --wait` still gives
+you a blocking wait and `dairy` cannot be steered. **Computer use — launching
 or scripting GUI apps (open, osascript, browsers) — requires full mode**; the
 default sandbox blocks it, tasks fail with permission errors, and full runs
 unsandboxed, so grant it only for tasks that genuinely need the machine. Pick
-models with the same profile words (terra, luna, sol) via the profile flag.
-Run either command with no arguments for usage.
+Codex/Pi profiles with `terra`, `luna`, or `sol`; Grok is selected with
+`--backend grok` and uses Grok's CLI default unless `--model` is supplied.
+Cursor Agent is `--backend cursor` (CLI binary cursor-agent, never PATH
+`agent`) with profiles from DELEGATE_CURSOR_PROFILES (grok, grok-fast,
+auto); it is not Grok Build. Use the live `dairy --help` and `herd spawn --help` grammar.
 
 **Always watch herd turns.** Immediately after every successful `herd spawn` or
 `herd send`, start exactly one background shell-tool task for that turn:
-`herd result <task> --wait --timeout <seconds>`. Use the tool's
+`herd result <task> --wait --timeout <seconds> --json`. Inspect
+`status.state` and, when present, `stall_reason`; exit 0 means only that the
+result query ran. Use the tool's
 `run_in_background` mode, not shell `&`, so completion wakes this session and is
 visible in the UI. Set the tool timeout at least as long as the command timeout.
-When it wakes, inspect the state and report; if the command timed out while the
-turn is still working, re-arm it. If you send a reply or follow-up, re-arm it for
-the resumed turn. Never leave a working herd turn without one live watcher.
+When it wakes, report the state rather than assuming success; if the command
+timed out while the turn is still working, re-arm it. If you send a reply or
+follow-up, re-arm it for the resumed turn. Never leave a working herd turn without one live watcher.
